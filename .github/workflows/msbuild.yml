@@ -65,15 +65,15 @@ jobs:
       run: |
         cd platforms/darwin
         xcodebuild -configuration Debug -sdk macosx10.13
- my_third_job:
-    name: linux build
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: go to platform/linux
-      run: |
+  my_third_job:
+     name: linux build
+     runs-on: ubuntu-latest
+     steps:
+     - uses: actions/checkout@v2
+     - name: go to platform/linux
+       run: |
           cd platforms/linux
           ls
           cp makefile Makefile
-    - name: make
-      run: make
+     - name: make
+       run: make
