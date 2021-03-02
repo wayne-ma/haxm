@@ -59,7 +59,7 @@ jobs:
           git status
           pwd
           ls
-          cd platforms/linux
+          cd platforms\linux
           pwd
           ls
           cp makefile Makefile
