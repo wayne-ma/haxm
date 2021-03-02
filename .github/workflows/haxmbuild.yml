@@ -64,6 +64,7 @@ jobs:
     - name: Mac darwin build
       run: |
         cd platforms/darwin
+        export SDKROOT = macosx10.13
         xcodebuild -configuration Debug -sdk macosx
   my_third_job:
     name: linux build
@@ -73,6 +74,7 @@ jobs:
     - name: Linux build
       run: |
           cd platforms/linux
+          pwd
           ls
           cp makefile Makefile
     - name: make
