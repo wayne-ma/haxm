@@ -1,4 +1,4 @@
-name: Windows MSBuild
+name: HAXM Build on Windows, Mac OS and Linux
 
 on: [push, pull_request]
 
@@ -64,13 +64,13 @@ jobs:
     - name: Mac darwin build
       run: |
         cd platforms/darwin
-        xcodebuild -configuration Debug -sdk macosx10.13
+        xcodebuild -configuration Debug -sdk macosx
   my_third_job:
     name: linux build
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: go to platform/linux
+    - name: Linux build
       run: |
           cd platforms/linux
           ls
