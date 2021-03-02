@@ -161,7 +161,7 @@ function __nmi, 0
     int 2h
     ret
 
-function __fls, 1
+function asm_fls, 1
     xor reg_ret_32, reg_ret_32
     bsr reg_ret_32, reg_arg1_32
     ret
@@ -211,6 +211,10 @@ function asm_disable_irq, 0
 
 function asm_enable_irq, 0
     sti
+    ret
+
+function asm_clts, 0
+    clts
     ret
 
 function asm_fxinit, 0

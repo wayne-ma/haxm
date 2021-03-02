@@ -84,11 +84,12 @@ static hax_ept_page * ept_tree_alloc_page(hax_ept_tree *tree)
     }
     ret = hax_alloc_page_frame(HAX_PAGE_ALLOC_ZEROED, &page->memdesc);
     if (ret) {
-        hax_error("%s: hax_alloc_page_frame() returned %d\n", __func__, ret);
+        hax_log(HAX_LOGE, "%s: hax_alloc_page_frame() returned %d\n",
+                __func__, ret);
         hax_vfree(page, sizeof(*page));
         return NULL;
     }
-    assert(tree != NULL);
+    hax_assert(tree != NULL);
     ept_tree_lock(tree);
     hax_list_add(&page->entry, &tree->page_list);
     ept_tree_unlock(tree);
@@ -113,7 +114,7 @@ static inline hax_ept_page_kmap * ept_tree_get_freq_page(hax_ept_tree *tree,
     //    space. Cached in freq_pages[2..(n + 1)].
     hax_ept_page_kmap *freq_page = NULL;
 
-    assert(tree != NULL);
+    hax_assert(tree != NULL);
     switch (level) {
         case HAX_EPT_LEVEL_PML4: {
             freq_page = &tree->freq_pages[0];
@@ -150,7 +151,7 @@ int ept_tree_init(hax_ept_tree *tree)
     uint64_t pfn;
 
     if (!tree) {
-        hax_error("%s: tree == NULL\n", __func__);
+        hax_log(HAX_LOGE, "%s: tree == NULL\n", __func__);
         return -EINVAL;
     }
 
@@ -160,22 +161,22 @@ int ept_tree_init(hax_ept_tree *tree)
 
     tree->lock = hax_spinlock_alloc_init();
     if (!tree->lock) {
-        hax_error("%s: Failed to allocate EPT tree lock\n", __func__);
+        hax_log(HAX_LOGE, "%s: Failed to allocate EPT tree lock\n", __func__);
         return -ENOMEM;
     }
 
     root_page = ept_tree_alloc_page(tree);
     if (!root_page) {
-        hax_error("%s: Failed to allocate EPT root page\n", __func__);
+        hax_log(HAX_LOGE, "%s: Failed to allocate EPT root page\n", __func__);
         hax_spinlock_free(tree->lock);
         return -ENOMEM;
     }
     kva = hax_get_kva_phys(&root_page->memdesc);
-    assert(kva != NULL);
+    hax_assert(kva != NULL);
     pfn = hax_get_pfn_phys(&root_page->memdesc);
-    assert(pfn != INVALID_PFN);
+    hax_assert(pfn != INVALID_PFN);
     root_page_kmap = ept_tree_get_freq_page(tree, 0, HAX_EPT_LEVEL_PML4);
-    assert(root_page_kmap != NULL);
+    hax_assert(root_page_kmap != NULL);
     root_page_kmap->page = root_page;
     root_page_kmap->kva = kva;
 
@@ -183,7 +184,7 @@ int ept_tree_init(hax_ept_tree *tree)
     tree->eptp.ept_mt = HAX_EPT_MEMTYPE_WB;
     tree->eptp.max_level = HAX_EPT_LEVEL_MAX;
     tree->eptp.pfn = pfn;
-    hax_info("%s: eptp=0x%llx\n", __func__, tree->eptp.value);
+    hax_log(HAX_LOGI, "%s: eptp=0x%llx\n", __func__, tree->eptp.value);
     return 0;
 }
 
@@ -192,13 +193,14 @@ static void ept_page_free(hax_ept_page *page)
     int ret;
 
     if (!page) {
-        hax_warning("%s: page == NULL\n", __func__);
+        hax_log(HAX_LOGW, "%s: page == NULL\n", __func__);
         return;
     }
 
     ret = hax_free_page_frame(&page->memdesc);
     if (ret) {
-        hax_warning("%s: hax_free_page_frame() returned %d\n", __func__, ret);
+        hax_log(HAX_LOGW, "%s: hax_free_page_frame() returned %d\n",
+                __func__, ret);
         // Still need to free the hax_ept_page object
     }
     hax_vfree(page, sizeof(*page));
@@ -210,7 +212,7 @@ int ept_tree_free(hax_ept_tree *tree)
     int i = 0;
 
     if (!tree) {
-        hax_error("%s: tree == NULL\n", __func__);
+        hax_log(HAX_LOGE, "%s: tree == NULL\n", __func__);
         return -EINVAL;
     }
 
@@ -220,7 +222,7 @@ int ept_tree_free(hax_ept_tree *tree)
         ept_page_free(page);
         i++;
     }
-    hax_info("%s: Total %d EPT page(s) freed\n", __func__, i);
+    hax_log(HAX_LOGI, "%s: Total %d EPT page(s) freed\n", __func__, i);
 
     hax_spinlock_free(tree->lock);
     return 0;
@@ -243,7 +245,7 @@ static inline hax_epte * ept_tree_get_root_table(hax_ept_tree *tree)
     hax_ept_page_kmap *root_page_kmap;
 
     root_page_kmap = ept_tree_get_freq_page(tree, 0, HAX_EPT_LEVEL_PML4);
-    assert(root_page_kmap != NULL);
+    hax_assert(root_page_kmap != NULL);
     return (hax_epte *) root_page_kmap->kva;
 }
 
@@ -280,11 +282,11 @@ static hax_epte * ept_tree_get_next_table(hax_ept_tree *tree, uint64_t gfn,
     hax_epte *epte;
     hax_epte *next_table = NULL;
 
-    assert(tree != NULL);
-    assert(next_level >= HAX_EPT_LEVEL_PT && next_level <= HAX_EPT_LEVEL_PDPT);
+    hax_assert(tree != NULL);
+    hax_assert(next_level >= HAX_EPT_LEVEL_PT && next_level <= HAX_EPT_LEVEL_PDPT);
     index = (uint) ((gfn >> (HAX_EPT_TABLE_SHIFT * current_level)) &
                     (HAX_EPT_TABLE_SIZE - 1));
-    assert(current_table != NULL);
+    hax_assert(current_table != NULL);
     epte = &current_table[index];
     if (visit_current_epte) {
         visit_current_epte(tree, gfn, current_level, epte, opaque);
@@ -307,12 +309,12 @@ static hax_epte * ept_tree_get_next_table(hax_ept_tree *tree, uint64_t gfn,
         page = ept_tree_alloc_page(tree);
         if (!page) {
             epte->value = 0;
-            hax_error("%s: Failed to create EPT page table: gfn=0x%llx,"
-                      " next_level=%d\n", __func__, gfn, next_level);
+            hax_log(HAX_LOGE, "%s: Failed to create EPT page table: gfn=0x%llx,"
+                    " next_level=%d\n", __func__, gfn, next_level);
             return NULL;
         }
         pfn = hax_get_pfn_phys(&page->memdesc);
-        assert(pfn != INVALID_PFN);
+        hax_assert(pfn != INVALID_PFN);
 
         temp_epte.perm = HAX_EPT_PERM_RWX;
         // This is a non-leaf |hax_epte|, so ept_mt and ignore_pat_mt are
@@ -320,7 +322,7 @@ static hax_epte * ept_tree_get_next_table(hax_ept_tree *tree, uint64_t gfn,
         temp_epte.pfn = pfn;
 
         kva = hax_get_kva_phys(&page->memdesc);
-        assert(kva != NULL);
+        hax_assert(kva != NULL);
         if (freq_page) {
             // The next-level EPT table is frequently used, so initialize its
             // KVA mapping cache
@@ -332,10 +334,10 @@ static hax_epte * ept_tree_get_next_table(hax_ept_tree *tree, uint64_t gfn,
         epte->value = temp_epte.value;
 
         next_table = (hax_epte *) kva;
-        hax_debug("%s: Created EPT page table: gfn=0x%llx, next_level=%d,"
-                  " pfn=0x%llx, kva=%p, freq_page_index=%ld\n", __func__, gfn,
-                  next_level, pfn, kva, freq_page ? freq_page - tree->freq_pages
-                                                  : -1);
+        hax_log(HAX_LOGD, "%s: Created EPT page table: gfn=0x%llx, "
+                "next_level=%d, pfn=0x%llx, kva=%p, freq_page_index=%ld\n",
+                __func__, gfn, next_level, pfn, kva,
+                freq_page ? freq_page - tree->freq_pages : -1);
     } else {  // !hax_cmpxchg64(0, INVALID_EPTE.value, &epte->value)
         // epte->value != 0, which could mean epte->perm != HAX_EPT_PERM_NONE,
         // i.e. the EPT entry pointing to the next-level EPT page table is
@@ -348,10 +350,12 @@ static hax_epte * ept_tree_get_next_table(hax_ept_tree *tree, uint64_t gfn,
             // Eventually the other thread will set epte->pfn to either a valid
             // PFN or 0
             if (!(++i % 10000)) {  // 10^4
-                hax_info("%s: In iteration %d of while loop\n", __func__, i);
+                hax_log(HAX_LOGI, "%s: In iteration %d of while loop\n",
+                        __func__, i);
                 if (i == 100000000) {  // 10^8 (< INT_MAX)
-                    hax_error("%s: Breaking out of infinite loop: gfn=0x%llx,"
-                              " next_level=%d\n", __func__, gfn, next_level);
+                    hax_log(HAX_LOGE, "%s: Breaking out of infinite loop: "
+                            "gfn=0x%llx, next_level=%d\n", __func__, gfn,
+                            next_level);
                     return NULL;
                 }
             }
@@ -359,9 +363,9 @@ static hax_epte * ept_tree_get_next_table(hax_ept_tree *tree, uint64_t gfn,
         if (!epte->value) {
             // The other thread has cleared epte->value, indicating it could not
             // create the next-level page table
-            hax_error("%s: Another thread tried to create the same EPT page"
-                      " table first, but failed: gfn=0x%llx, next_level=%d\n",
-                      __func__, gfn, next_level);
+            hax_log(HAX_LOGE, "%s: Another thread tried to create the same EPT "
+                    "page table first, but failed: gfn=0x%llx, next_level=%d\n",
+                    __func__, gfn, next_level);
             return NULL;
         }
 
@@ -369,16 +373,16 @@ static hax_epte * ept_tree_get_next_table(hax_ept_tree *tree, uint64_t gfn,
             // The next-level EPT table is frequently used, so its KVA mapping
             // must have been cached
             kva = freq_page->kva;
-            assert(kva != NULL);
+            hax_assert(kva != NULL);
         } else {
             // The next-level EPT table is not frequently used, which means a
             // temporary KVA mapping needs to be created
-            assert(epte->pfn != INVALID_PFN);
-            assert(kmap != NULL);
+            hax_assert(epte->pfn != INVALID_PFN);
+            hax_assert(kmap != NULL);
             kva = hax_map_page_frame(epte->pfn, kmap);
             if (!kva) {
-                hax_error("%s: Failed to map pfn=0x%llx into KVA space\n",
-                          __func__, epte->pfn);
+                hax_log(HAX_LOGE, "%s: Failed to map pfn=0x%llx into "
+                        "KVA space\n", __func__, epte->pfn);
             }
         }
         next_table = (hax_epte *) kva;
@@ -390,7 +394,7 @@ static inline void kmap_swap(hax_kmap_phys *kmap1, hax_kmap_phys *kmap2)
 {
     hax_kmap_phys tmp;
 
-    assert(kmap1 != NULL && kmap2 != NULL);
+    hax_assert(kmap1 != NULL && kmap2 != NULL);
     tmp = *kmap1;
     *kmap1 = *kmap2;
     *kmap2 = tmp;
@@ -406,16 +410,16 @@ int ept_tree_create_entry(hax_ept_tree *tree, uint64_t gfn, hax_epte value)
     hax_epte *pte;
 
     if (!tree) {
-        hax_error("%s: tree == NULL\n", __func__);
+        hax_log(HAX_LOGE, "%s: tree == NULL\n", __func__);
         return -EINVAL;
     }
     if (value.perm == HAX_EPT_PERM_NONE) {
-        hax_error("%s: value.perm == 0\n", __func__);
+        hax_log(HAX_LOGE, "%s: value.perm == 0\n", __func__);
         return -EINVAL;
     }
 
     table = ept_tree_get_root_table(tree);
-    assert(table != NULL);
+    hax_assert(table != NULL);
     for (level = HAX_EPT_LEVEL_PML4; level >= HAX_EPT_LEVEL_PD; level--) {
         table = ept_tree_get_next_table(tree, gfn, level, table, &kmap, true,
                                         NULL, NULL);
@@ -423,11 +427,11 @@ int ept_tree_create_entry(hax_ept_tree *tree, uint64_t gfn, hax_epte value)
         // Note that hax_unmap_page_frame() does not fail when the KVA mapping
         // descriptor is filled with zeroes
         ret = hax_unmap_page_frame(&prev_kmap);
-        assert(ret == 0);
+        hax_assert(ret == 0);
         // prev_kmap is now filled with zeroes
         if (!table) {
-            hax_error("%s: Failed to grab the next-level EPT page table:"
-                      " gfn=0x%llx, level=%d\n", __func__, gfn, level);
+            hax_log(HAX_LOGE, "%s: Failed to grab the next-level EPT page "
+                    "table: gfn=0x%llx, level=%d\n", __func__, gfn, level);
             return -ENOMEM;
         }
         // Swap prev_kmap with kmap
@@ -436,24 +440,25 @@ int ept_tree_create_entry(hax_ept_tree *tree, uint64_t gfn, hax_epte value)
     }
     // Now level == HAX_EPT_LEVEL_PT, and table points to an EPT leaf page (PT)
     pt_index = get_pt_index(gfn);
-    assert(table != NULL);
+    hax_assert(table != NULL);
     pte = &table[pt_index];
     if (!hax_cmpxchg64(0, value.value, &pte->value)) {
         // pte->value != 0, implying pte->perm != HAX_EPT_PERM_NONE
         if (pte->value != value.value) {
-            hax_error("%s: A different PTE corresponding to gfn=0x%llx already"
-                      " exists: old_value=0x%llx, new_value=0x%llx\n", __func__,
-                      gfn, pte->value, value.value);
+            hax_log(HAX_LOGE, "%s: A different PTE corresponding to gfn=0x%llx"
+                    " already exists: old_value=0x%llx, new_value=0x%llx\n",
+                    __func__, gfn, pte->value, value.value);
             hax_unmap_page_frame(&kmap);
             return -EEXIST;
         } else {
-            hax_info("%s: Another thread has already created the same PTE:"
-                     " gfn=0x%llx, value=0x%llx\n", __func__, gfn, value.value);
+            hax_log(HAX_LOGI, "%s: Another thread has already created the"
+                    " same PTE: gfn=0x%llx, value=0x%llx\n",
+                    __func__, gfn, value.value);
         }
     }
 
     ret = hax_unmap_page_frame(&prev_kmap);
-    assert(ret == 0);
+    hax_assert(ret == 0);
     return 0;
 }
 
@@ -471,10 +476,10 @@ int ept_tree_create_entries(hax_ept_tree *tree, uint64_t start_gfn, uint64_t npa
     uint64_t offset = offset_within_chunk;
     int created_count = 0;
 
-    assert(tree != NULL);
-    assert(npages != 0);
-    assert(chunk != NULL);
-    assert(offset_within_chunk + (npages << PG_ORDER_4K) <= chunk->size);
+    hax_assert(tree != NULL);
+    hax_assert(npages != 0);
+    hax_assert(chunk != NULL);
+    hax_assert(offset_within_chunk + (npages << PG_ORDER_4K) <= chunk->size);
 
     new_pte.perm = is_rom ? HAX_EPT_PERM_RX : HAX_EPT_PERM_RWX;
     // According to IA SDM Vol. 3A 11.3.2, WB offers the best performance and
@@ -486,13 +491,13 @@ int ept_tree_create_entries(hax_ept_tree *tree, uint64_t start_gfn, uint64_t npa
     gfn = start_gfn;
     end_gfn = start_gfn + npages - 1;
     pml4 = ept_tree_get_root_table(tree);
-    assert(pml4 != NULL);
+    hax_assert(pml4 != NULL);
 next_pdpt:
     pdpt = ept_tree_get_next_table(tree, gfn, HAX_EPT_LEVEL_PML4, pml4,
                                    &pdpt_kmap, true, NULL, NULL);
     if (!pdpt) {
-        hax_error("%s: Failed to grab the EPT PDPT for %s gfn=0x%llx\n",
-                  __func__, is_rom ? "ROM" : "RAM", gfn);
+        hax_log(HAX_LOGE, "%s: Failed to grab the EPT PDPT for %s gfn=0x%llx\n",
+                __func__, is_rom ? "ROM" : "RAM", gfn);
         ret = -ENOMEM;
         goto out;
     }
@@ -500,8 +505,8 @@ next_pd:
     pd = ept_tree_get_next_table(tree, gfn, HAX_EPT_LEVEL_PDPT, pdpt, &pd_kmap,
                                  true, NULL, NULL);
     if (!pd) {
-        hax_error("%s: Failed to grab the EPT PD for %s gfn=0x%llx\n", __func__,
-                  is_rom ? "ROM" : "RAM", gfn);
+        hax_log(HAX_LOGE, "%s: Failed to grab the EPT PD for %s gfn=0x%llx\n",
+                __func__, is_rom ? "ROM" : "RAM", gfn);
         ret = -ENOMEM;
         goto out_pdpt;
     }
@@ -509,8 +514,8 @@ next_pt:
     pt = ept_tree_get_next_table(tree, gfn, HAX_EPT_LEVEL_PD, pd, &pt_kmap,
                                  true, NULL, NULL);
     if (!pt) {
-        hax_error("%s: Failed to grab the EPT PT for %s gfn=0x%llx\n", __func__,
-                  is_rom ? "ROM" : "RAM", gfn);
+        hax_log(HAX_LOGE, "%s: Failed to grab the EPT PT for %s gfn=0x%llx\n",
+                __func__, is_rom ? "ROM" : "RAM", gfn);
         ret = -ENOMEM;
         goto out_pd;
     }
@@ -535,20 +540,21 @@ next_pt:
         hax_epte *pte = &pt[index];
 
         new_pte.pfn = hax_get_pfn_user(&chunk->memdesc, offset);
-        assert(new_pte.pfn != INVALID_PFN);
+        hax_assert(new_pte.pfn != INVALID_PFN);
         if (!hax_cmpxchg64(0, new_pte.value, &pte->value)) {
             // pte->value != 0, implying pte->perm != HAX_EPT_PERM_NONE
             if (pte->value != new_pte.value) {
-                hax_error("%s: A different PTE corresponding to %s gfn=0x%llx"
-                          " already exists: old_value=0x%llx, new_value=0x%llx"
-                          "\n", __func__, is_rom ? "ROM" : "RAM", gfn,
-                          pte->value, new_pte.value);
+                hax_log(HAX_LOGE, "%s: A different PTE corresponding to %s "
+                        "gfn=0x%llx already exists: old_value=0x%llx, "
+                        "new_value=0x%llx\n", __func__, is_rom ? "ROM" : "RAM",
+                        gfn, pte->value, new_pte.value);
                 ret = -EEXIST;
                 goto out_pt;
             } else {
-                hax_debug("%s: Another thread has already created the same PTE:"
-                          " gfn=0x%llx, value=0x%llx, is_rom=%s\n", __func__,
-                          gfn, new_pte.value, is_rom ? "true" : "false");
+                hax_log(HAX_LOGD, "%s: Another thread has already created the "
+                        "same PTE: gfn=0x%llx, value=0x%llx, is_rom=%s\n",
+                        __func__, gfn, new_pte.value,
+                        is_rom ? "true" : "false");
             }
         } else {
             // pte->value was 0, but has been set to new_pte.value
@@ -566,7 +572,7 @@ next_pt:
         // c) make_gfn(w + 1, 0, 0, 0), if x == y == 511 and w < 511;
         // d) make_gfn(512, 0, 0, 0) (invalid), if w == x == y == 511. This
         //    cannot possibly happen, because end_gfn must be valid.
-        assert(!get_pt_index(gfn));
+        hax_assert(!get_pt_index(gfn));
         hax_unmap_page_frame(&pt_kmap);
         if (!get_pd_index(gfn)) {
             hax_unmap_page_frame(&pd_kmap);
@@ -606,8 +612,8 @@ void get_pte(hax_ept_tree *tree, uint64_t gfn, int level, hax_epte *epte,
     }
 
     // level == HAX_EPT_LEVEL_PT
-    assert(epte != NULL);
-    assert(opaque != NULL);
+    hax_assert(epte != NULL);
+    hax_assert(opaque != NULL);
     pte = (hax_epte *) opaque;
     *pte = *epte;
 }
@@ -631,21 +637,21 @@ void ept_tree_walk(hax_ept_tree *tree, uint64_t gfn, epte_visitor visit_epte,
     hax_epte *pte;
 
     if (!tree) {
-        hax_error("%s: tree == NULL\n", __func__);
+        hax_log(HAX_LOGE, "%s: tree == NULL\n", __func__);
         return;
     }
     if (!visit_epte) {
-        hax_warning("%s: visit_epte == NULL\n", __func__);
+        hax_log(HAX_LOGW, "%s: visit_epte == NULL\n", __func__);
         return;
     }
 
     table = ept_tree_get_root_table(tree);
-    assert(table != NULL);
+    hax_assert(table != NULL);
     for (level = HAX_EPT_LEVEL_PML4; level >= HAX_EPT_LEVEL_PD; level--) {
         table = ept_tree_get_next_table(tree, gfn, level, table, &kmap, false,
                                         visit_epte, opaque);
         ret = hax_unmap_page_frame(&prev_kmap);
-        assert(ret == 0);
+        hax_assert(ret == 0);
         if (!table) {
             // An intermediate EPT page table is missing, which means the EPT
             // leaf entry to be invalidated is not present
@@ -654,12 +660,12 @@ void ept_tree_walk(hax_ept_tree *tree, uint64_t gfn, epte_visitor visit_epte,
         kmap_swap(&prev_kmap, &kmap);
     }
     pt_index = get_pt_index(gfn);
-    assert(table != NULL);
+    hax_assert(table != NULL);
     pte = &table[pt_index];
     visit_epte(tree, gfn, HAX_EPT_LEVEL_PT, pte, opaque);
 
     ret = hax_unmap_page_frame(&prev_kmap);
-    assert(ret == 0);
+    hax_assert(ret == 0);
 }
 
 void invalidate_pte(hax_ept_tree *tree, uint64_t gfn, int level, hax_epte *epte,
@@ -673,9 +679,9 @@ void invalidate_pte(hax_ept_tree *tree, uint64_t gfn, int level, hax_epte *epte,
     }
 
     // level == HAX_EPT_LEVEL_PT
-    assert(tree != NULL);
-    assert(epte != NULL);
-    assert(opaque != NULL);
+    hax_assert(tree != NULL);
+    hax_assert(epte != NULL);
+    hax_assert(opaque != NULL);
     pte = epte;
     modified = (bool *) opaque;
     if (pte->perm == HAX_EPT_PERM_NONE) {
@@ -683,8 +689,8 @@ void invalidate_pte(hax_ept_tree *tree, uint64_t gfn, int level, hax_epte *epte,
         return;
     }
 
-    hax_info("%s: Invalidating PTE: gfn=0x%llx, value=0x%llx\n", __func__, gfn,
-             pte->value);
+    hax_log(HAX_LOGI, "%s: Invalidating PTE: gfn=0x%llx, value=0x%llx\n",
+            __func__, gfn, pte->value);
     ept_tree_lock(tree);
     pte->value = 0;  // implies pte->perm == HAX_EPT_PERM_NONE
     ept_tree_unlock(tree);
@@ -708,19 +714,20 @@ int ept_tree_invalidate_entries(hax_ept_tree *tree, uint64_t start_gfn,
     int modified_count = 0;
 
     if (!tree) {
-        hax_error("%s: tree == NULL\n", __func__);
+        hax_log(HAX_LOGE, "%s: tree == NULL\n", __func__);
         return -EINVAL;
     }
 
     // TODO: Implement a faster algorithm
     for (gfn = start_gfn; gfn < end_gfn; gfn++) {
         int ret = ept_tree_invalidate_entry(tree, gfn);
-        assert(ret == 0 || ret == 1);
+        hax_assert(ret == 0 || ret == 1);
         modified_count += ret;
     }
     if (modified_count) {
         if (hax_test_and_set_bit(0, (uint64_t *) &tree->invept_pending)) {
-            hax_warning("%s: INVEPT pending flag is already set\n", __func__);
+            hax_log(HAX_LOGW, "%s: INVEPT pending flag is already set\n",
+                    __func__);
         }
     }
     return modified_count;

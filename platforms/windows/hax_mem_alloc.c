@@ -50,14 +50,18 @@ void * hax_vmalloc(uint32_t size, uint32_t flags)
     if (flags == 0)
         flags = HAX_MEM_NONPAGE;
 
-    if (flags & HAX_MEM_PAGABLE)
+    if (flags & HAX_MEM_PAGABLE) {
         buf = ExAllocatePoolWithTag(PagedPool, size, HAX_MEM_TAG);
-
-    if (flags & HAX_MEM_NONPAGE)
+    } else if (flags & HAX_MEM_NONPAGE) {
         buf = ExAllocatePoolWithTag(NonPagedPool, size, HAX_MEM_TAG);
+    } else {
+        return NULL;
+    }
 
-    if (buf)
-        memset(buf, 0, size);
+    if (buf == NULL)
+        return NULL;
+
+    memset(buf, 0, size);
 
     return buf;
 }
@@ -78,18 +82,6 @@ void hax_vfree_aligned(void *va, uint32_t size, uint32_t alignment,
     hax_vfree_flags(va, size, flags);
 }
 
-void * hax_vmap(hax_pa_t pa, uint32_t size)
-{
-    PHYSICAL_ADDRESS phys_addr;
-    phys_addr.QuadPart = pa;
-
-    if ((pa & (PAGE_SIZE - 1)) + size > PAGE_SIZE) {
-        hax_warning("hax_vmap can't handle cross-page case!\n");
-        return NULL;
-    }
-    return MmMapIoSpace(phys_addr, size, MmCached);
-}
-
 void hax_vunmap(void *addr, uint32_t size)
 {
     MmUnmapIoSpace(addr, size);
@@ -105,7 +97,7 @@ struct hax_page * hax_alloc_pages(int order, uint32_t flags, bool vmap)
 {
     struct hax_page *ppage = NULL;
     PMDL pmdl = NULL;
-    uint64_t length = (1 << order) * PAGE_SIZE;
+    uint64_t length = (1ULL << order) * PAGE_SIZE;
     PHYSICAL_ADDRESS high_addr, low_addr, skip_bytes;
 #ifdef MDL_HAX_PAGE
     ULONG options;

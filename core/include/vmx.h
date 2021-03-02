@@ -58,16 +58,16 @@ enum {
     VMX_EXIT_RDPMC                   = 15, // Guest executed RDPMC instruction
     VMX_EXIT_RDTSC                   = 16, // Guest executed RDTSC instruction
     VMX_EXIT_RSM                     = 17, // Guest executed RSM instruction in SMM
-    VMX_EXIT_VMCALL                  = 18,
-    VMX_EXIT_VMCLEAR                 = 19,
-    VMX_EXIT_VMLAUNCH                = 20,
-    VMX_EXIT_VMPTRLD                 = 21,
-    VMX_EXIT_VMPTRST                 = 22,
-    VMX_EXIT_VMREAD                  = 23,
-    VMX_EXIT_VMRESUME                = 24,
-    VMX_EXIT_VMWRITE                 = 25,
-    VMX_EXIT_VMXOFF                  = 26,
-    VMX_EXIT_VMXON                   = 27,
+    VMX_EXIT_VMCALL                  = 18, // Guest executed VMCALL instruction
+    VMX_EXIT_VMCLEAR                 = 19, // Guest executed VMCLEAR instruction
+    VMX_EXIT_VMLAUNCH                = 20, // Guest executed VMLAUNCH instruction
+    VMX_EXIT_VMPTRLD                 = 21, // Guest executed VMPTRLD instruction
+    VMX_EXIT_VMPTRST                 = 22, // Guest executed VMPTRST instruction
+    VMX_EXIT_VMREAD                  = 23, // Guest executed VMREAD instruction
+    VMX_EXIT_VMRESUME                = 24, // Guest executed VMRESUME instruction
+    VMX_EXIT_VMWRITE                 = 25, // Guest executed VMWRITE instruction
+    VMX_EXIT_VMXOFF                  = 26, // Guest executed VMXON instruction
+    VMX_EXIT_VMXON                   = 27, // Guest executed VMXOFF instruction
     VMX_EXIT_CR_ACCESS               = 28, // Guest accessed a control register
     VMX_EXIT_DR_ACCESS               = 29, // Guest attempted access to debug register
     VMX_EXIT_IO                      = 30, // Guest attempted I/O
@@ -91,7 +91,7 @@ enum {
     VMX_EXIT_VMX_TIMER_EXIT          = 52,
     VMX_EXIT_INVVPID                 = 53,
     VMX_EXIT_WBINVD                  = 54,
-    VMX_EXIT_XSETBV                  = 55,
+    VMX_EXIT_XSETBV                  = 55, // Guest executed XSETBV instruction
     VMX_EXIT_APIC_WRITE              = 56,
     VMX_EXIT_RDRAND                  = 57,
     VMX_EXIT_INVPCID                 = 58,
@@ -502,6 +502,12 @@ enum {
     GAS_CSTATE      = 4
 };
 
+// Intel SDM Vol. 3C: Table 24-3. Format of Interruptibility State
+#define GUEST_INTRSTAT_STI_BLOCKING            0x00000001
+#define GUEST_INTRSTAT_SS_BLOCKING             0x00000002
+#define GUEST_INTRSTAT_SMI_BLOCKING            0x00000004
+#define GUEST_INTRSTAT_NMI_BLOCKING            0x00000008
+
 #ifdef HAX_COMPILER_MSVC
 #pragma pack(push, 1)
 #endif
@@ -633,15 +639,21 @@ struct invept_desc {
     uint64_t rsvd;
 };
 
+// Intel SDM Vol. 3C: Table 24-12. Format of an MSR Entry
+typedef struct ALIGNED(16) vmx_msr_entry {
+    uint64_t index;
+    uint64_t data;
+} vmx_msr_entry;
+
 struct vcpu_state_t;
 struct vcpu_t;
 
 vmx_result_t ASMCALL asm_invept(uint type, struct invept_desc *desc);
-vmx_result_t ASMCALL asm_vmclear(const paddr_t *addr_in);
-vmx_result_t ASMCALL asm_vmptrld(const paddr_t *addr_in);
-vmx_result_t ASMCALL asm_vmxon(const paddr_t *addr_in);
+vmx_result_t ASMCALL asm_vmclear(const hax_paddr_t *addr_in);
+vmx_result_t ASMCALL asm_vmptrld(const hax_paddr_t *addr_in);
+vmx_result_t ASMCALL asm_vmxon(const hax_paddr_t *addr_in);
 vmx_result_t ASMCALL asm_vmxoff(void);
-vmx_result_t ASMCALL asm_vmptrst(paddr_t *addr_out);
+vmx_result_t ASMCALL asm_vmptrst(hax_paddr_t *addr_out);
 vmx_result_t ASMCALL asm_vmxrun(struct vcpu_state_t *state, uint16_t launch);
 
 mword ASMCALL vmx_get_rip(void);
@@ -650,13 +662,14 @@ mword ASMCALL asm_vmread(uint32_t component);
 void ASMCALL asm_vmwrite(uint32_t component, mword val);
 
 uint64_t vmread(struct vcpu_t *vcpu, component_index_t component);
-uint64_t vmread_dump(struct vcpu_t *vcpu, unsigned enc, char *name);
+uint64_t vmread_dump(struct vcpu_t *vcpu, unsigned enc, const char *name);
 void vmx_vmwrite(struct vcpu_t *vcpu, const char *name,
                  component_index_t component, uint64_t source_val);
 
 #define vmwrite(vcpu, x, y) vmx_vmwrite(vcpu, #x, x, y)
 
 #define VMREAD_SEG(vcpu, seg, val)                                 \
+    do {                                                           \
         ((val).selector = vmread(vcpu, GUEST_##seg##_SELECTOR),    \
          (val).base     = vmread(vcpu, GUEST_##seg##_BASE),        \
          (val).limit    = vmread(vcpu, GUEST_##seg##_LIMIT),       \
@@ -664,7 +677,8 @@ void vmx_vmwrite(struct vcpu_t *vcpu, const char *name,
         {                                                          \
             if ((val).null == 1)                                   \
                 (val).ar = 0;                                      \
-        }
+        }                                                          \
+    } while (false)
 
 #define VMREAD_DESC(vcpu, desc, val)                               \
         ((val).base  = vmread(vcpu, GUEST_##desc##_BASE),          \
@@ -681,7 +695,7 @@ void vmx_vmwrite(struct vcpu_t *vcpu, const char *name,
             vmwrite(vcpu, GUEST_##seg##_AR, tmp_ar);               \
         }
 
-#elif defined(HAX_PLATFORM_DARWIN)
+#else
 #define VMWRITE_SEG(vcpu, seg, val) ({                             \
             uint32_t tmp_ar = val.ar;                              \
             if (tmp_ar == 0)                                       \

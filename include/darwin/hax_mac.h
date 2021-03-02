@@ -169,42 +169,6 @@ static inline errno_t memcpy_s(void *dest, size_t destsz, const void *src,
     return 0;
 }
 
-extern int default_hax_log_level;
-
-#define hax_error(x...) {                          \
-            if (HAX_LOGE >= default_hax_log_level) \
-                printf("haxm_error: " x);          \
-        }
-
-#define hax_warning(x...) {                        \
-            if (HAX_LOGW >= default_hax_log_level) \
-                printf("haxm_warn: " x);           \
-        }
-
-#define hax_info(x...) {                           \
-            if (HAX_LOGI >= default_hax_log_level) \
-                printf("haxm_info: " x);           \
-        }
-
-#define hax_debug(x...) {                          \
-            if (HAX_LOGD >= default_hax_log_level) \
-                printf("haxm_debug: " x);          \
-        }
-
-#define hax_log hax_info
-
-#define hax_panic panic
-
-#define hax_panic_vcpu(v, x...) {     \
-            printf("haxm_panic: " x); \
-            v->panicked = 1;          \
-        }
-
-static inline bool cpu_is_online(int cpu)
-{
-    if (cpu < 0 || cpu >= max_cpus)
-        return 0;
-    return !!(((uint64_t)1 << cpu) & cpu_online_map);
-}
+#define hax_assert(condition) assert(condition)
 
 #endif  // HAX_DARWIN_HAX_MAC_H_

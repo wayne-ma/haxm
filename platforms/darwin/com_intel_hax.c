@@ -94,41 +94,9 @@ static int lock_prim_init(void)
 
     return 0;
 error:
-    hax_log_level(HAX_LOGE, "Failed to init lock primitive\n");
+    hax_log(HAX_LOGE, "Failed to init lock primitive\n");
     lock_prim_exit();
     return -1;
-}
-
-cpumap_t cpu_online_map;
-int max_cpus;
-
-void get_online_map(void *param)
-{
-    uint64_t *omap;
-
-    //printf("%x\n", cpu_number());
-    omap = param;
-    if (!omap) {
-        hax_log_level(HAX_LOGE, "NULL pointer in get online map\n");
-        return;
-    }
-
-    hax_test_and_set_bit(cpu_number(), omap);
-    printf("%llx\n ", *omap);
-    return;
-}
-
-/* This is provided in unsupported kext */
-extern unsigned int real_ncpus;
-static void init_cpu_info(void)
-{
-    uint64_t possible_map, omap = 0;
-
-    possible_map = ~0ULL;
-    smp_call_function(&possible_map, get_online_map, &omap);
-    printf("possible map %llx cpu_online_map %llx\n", possible_map, omap);
-    cpu_online_map = omap;
-    max_cpus = real_ncpus;
 }
 
 static int com_intel_hax_init(void)
@@ -139,13 +107,9 @@ static int com_intel_hax_init(void)
     if (ret < 0)
         return ret;
 
-    init_cpu_info();
-
-    if (max_cpus > HAX_MAX_CPUS) {
-        hax_error("Too many cpus in system!, max_cpus:%d\n", real_ncpus);
-        ret = -E2BIG;
+    ret = cpu_info_init();
+    if (ret < 0)
         goto fail0;
-    }
 
     ret = hax_malloc_init();
     if (ret < 0)
@@ -153,6 +117,7 @@ static int com_intel_hax_init(void)
 
     return 0;
 fail0:
+    cpu_info_exit();
     lock_prim_exit();
     return ret;
 }
@@ -166,25 +131,25 @@ static int com_intel_hax_exit(void)
 }
 
 kern_return_t com_intel_hax_start(kmod_info_t * ki, void * d) {
-    hax_log_level(HAX_LOGD, "Start HAX module\n");
+    hax_log(HAX_LOGD, "Start HAX module\n");
 
     if (com_intel_hax_init() < 0) {
-        hax_log_level(HAX_LOGE, "Failed to init hax context\n");
+        hax_log(HAX_LOGE, "Failed to init hax context\n");
         return KERN_FAILURE;
     }
 
     if (hax_module_init() < 0) {
-        hax_log_level(HAX_LOGE, "Failed to init host hax\n");
+        hax_log(HAX_LOGE, "Failed to init host hax\n");
         goto fail1;
     }
 
     if (!hax_em64t_enabled()) {
-        hax_log_level(HAX_LOGE, "Cpu has no EMT64 support!\n");
+        hax_log(HAX_LOGE, "Cpu has no EMT64 support!\n");
         goto fail2;
     }
 
     if (com_intel_hax_init_ui() < 0) {
-        hax_log_level(HAX_LOGE, "Failed to init hax UI\n");
+        hax_log(HAX_LOGE, "Failed to init hax UI\n");
         goto fail2;
     }
 
@@ -202,11 +167,11 @@ kern_return_t com_intel_hax_stop(kmod_info_t * ki, void * d)
 {
     int ret;
 
-    hax_log_level(HAX_LOGD, "Stop HAX module\n");
+    hax_log(HAX_LOGD, "Stop HAX module\n");
     ret = hax_module_exit();
     if (ret < 0) {
-        hax_error("The module can't be removed now, \n"
-                  " close all VM interface and try again\n");
+        hax_log(HAX_LOGE, "The module can't be removed now, \n"
+                " close all VM interface and try again\n");
         return KERN_FAILURE;
     }
     com_intel_hax_exit();

@@ -73,12 +73,13 @@ int hax_clear_vcpumem(struct hax_vcpu_mem *mem)
 int hax_valid_uva(uint64_t uva, uint64_t size)
 {
     return 1;
-    try {
-        ProbeForRead(&uva, size, PAGE_SIZE);
-    } except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-    return 1;
+// FIXME: Is it still available to verify the address?
+//    try {
+//        ProbeForRead(&uva, size, PAGE_SIZE);
+//    } except (EXCEPTION_EXECUTE_HANDLER) {
+//        return 0;
+//    }
+//    return 1;
 }
 
 int hax_setup_vcpumem(struct hax_vcpu_mem *mem, uint64_t uva, uint32_t size,
@@ -101,14 +102,14 @@ int hax_setup_vcpumem(struct hax_vcpu_mem *mem, uint64_t uva, uint32_t size,
     if (flags & HAX_VCPUMEM_VALIDVA) {
         pmdl = IoAllocateMdl((void*)uva, size, FALSE, FALSE, NULL);
         if (!pmdl) {
-            hax_error("Failed to allocate memory for va: %llx\n", uva);
+            hax_log(HAX_LOGE, "Failed to allocate memory for va: %llx\n", uva);
             goto fail;
         }
 
         try {
             MmProbeAndLockPages(pmdl, UserMode, IoReadAccess|IoWriteAccess);
         } except (EXCEPTION_EXECUTE_HANDLER) {
-            hax_error("Failed to probe pages for guest's memory!\n");
+            hax_log(HAX_LOGE, "Failed to probe pages for guest's memory!\n");
             IoFreeMdl(pmdl);
             pmdl = NULL;
             goto fail;
@@ -118,7 +119,7 @@ int hax_setup_vcpumem(struct hax_vcpu_mem *mem, uint64_t uva, uint32_t size,
 #ifdef _WIN64
         mem->kva = MmGetSystemAddressForMdlSafe(pmdl, NormalPagePriority);
         if (!mem->kva) {
-            hax_error("Failed to map the pmdl to system address!\n");
+            hax_log(HAX_LOGE, "Failed to map the pmdl to system address!\n");
             goto fail;
         }
 #else
@@ -137,10 +138,10 @@ int hax_setup_vcpumem(struct hax_vcpu_mem *mem, uint64_t uva, uint32_t size,
 #endif
 
         if (!pmdl || MmGetMdlByteCount(pmdl) < size) {
-            hax_error("Failed to alloate pmdl!\n");
+            hax_log(HAX_LOGE, "Failed to alloate pmdl!\n");
             if (pmdl)
-                DbgPrint("allocated size:%d, size:%d\n",
-                         MmGetMdlByteCount(pmdl), size);
+                hax_log(HAX_LOGD, "allocated size:%d, size:%d\n",
+                        MmGetMdlByteCount(pmdl), size);
             goto fail;
         }
 
@@ -149,17 +150,17 @@ int hax_setup_vcpumem(struct hax_vcpu_mem *mem, uint64_t uva, uint32_t size,
                                                           FALSE,
                                                           NormalPagePriority);
         if (!mem->uva) {
-            hax_error("Failed to map tunnel to user space\n");
+            hax_log(HAX_LOGE, "Failed to map tunnel to user space\n");
             goto fail;
         }
         mem->kva = MmMapLockedPagesSpecifyCache(pmdl, KernelMode, MmCached,
                                                 NULL, FALSE,
                                                 NormalPagePriority);
         if (!mem->kva) {
-            hax_error("Failed to map tunnel to kernel space\n");
+            hax_log(HAX_LOGE, "Failed to map tunnel to kernel space\n");
             goto fail;
         }
-        hax_debug("kva %llx va %llx\n", (uint64_t)mem->kva, mem->uva);
+        hax_log(HAX_LOGD, "kva %llx va %llx\n", (uint64_t)mem->kva, mem->uva);
     }
     mem->size = size;
     mem->hinfo = hinfo;
@@ -175,75 +176,8 @@ fail:
     return -1;
 }
 
-uint64_t get_hpfn_from_pmem(struct hax_vcpu_mem *pmem, uint64_t va)
-{
-    PHYSICAL_ADDRESS phys;
-
-    if (!in_pmem_range(pmem, va))
-        return 0;
-
-    phys = MmGetPhysicalAddress((PVOID)va);
-    if (phys.QuadPart == 0) {
-        if (pmem->kva != 0) {
-            uint64_t kva;
-            PHYSICAL_ADDRESS kphys;
-
-            kva = (uint64_t)pmem->kva + (va - pmem->uva);
-            kphys = MmGetPhysicalAddress((PVOID)kva);
-            if (kphys.QuadPart == 0)
-                hax_error("kva phys is 0\n");
-            else
-                return kphys.QuadPart >> PAGE_SHIFT;
-        } else {
-            unsigned long long index = 0;
-            PMDL pmdl = NULL;
-            PPFN_NUMBER ppfnnum;
-
-            pmdl = ((struct windows_vcpu_mem *)(pmem->hinfo))->pmdl;
-            ppfnnum = MmGetMdlPfnArray(pmdl);
-            index = (va - (pmem->uva)) / PAGE_SIZE;
-            return ppfnnum[index];
-        }
-    }
-
-    return phys.QuadPart >> PAGE_SHIFT;
-}
-
 uint64_t hax_get_memory_threshold(void)
 {
-#ifdef CONFIG_HAX_EPT2
     // Since there is no memory cap, just return a sufficiently large value
     return 1ULL << 48;  // PHYSADDR_MAX + 1
-#else  // !CONFIG_HAX_EPT2
-    uint64_t result = 0;
-    NTSTATUS status;
-    ULONG relative_to;
-    UNICODE_STRING path;
-    RTL_QUERY_REGISTRY_TABLE query_table[2];
-    ULONG memlimit_megs = 0;
-
-    relative_to = RTL_REGISTRY_ABSOLUTE | RTL_REGISTRY_OPTIONAL;
-
-    RtlInitUnicodeString(&path, L"\\Registry\\Machine\\SOFTWARE\\HAXM\\HAXM\\");
-
-    /* The registry is Mega byte count */
-    RtlZeroMemory(query_table, sizeof(query_table));
-
-    query_table[0].Flags         = RTL_QUERY_REGISTRY_DIRECT;
-    query_table[0].Name          = L"MemLimit";
-    query_table[0].EntryContext  = &memlimit_megs;
-    query_table[0].DefaultType   = REG_DWORD;
-    query_table[0].DefaultLength = sizeof(ULONG);
-    query_table[0].DefaultData   = &memlimit_megs;
-
-    status = RtlQueryRegistryValues(relative_to, path.Buffer, &query_table[0],
-                                    NULL, NULL);
-
-    if (NT_SUCCESS(status)) {
-        result = (uint64_t)memlimit_megs << 20;
-        hax_info("%s: result = 0x%x\n", __func__, result);
-    }
-
-    return result;
-#endif  // CONFIG_HAX_EPT2
 }

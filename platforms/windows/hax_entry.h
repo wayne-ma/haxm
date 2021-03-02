@@ -89,7 +89,7 @@ static inline smpc_dpc_exit(void) { return 1; }
 #endif
 
 /* According to DDK, the IoAllocateMdl can support at most
- * 64M - page_size * (sizeof(MDL))/sizeof(ULONG_PTR), so take 32M here
+ * 64M - PAGE_SIZE * (sizeof(MDL))/sizeof(ULONG_PTR), so take 32M here
  */
 #if (NTDDI_VERSION <= NTDDI_WS03)
 #define HAX_RAM_ENTRY_SIZE 0x2000000
@@ -165,5 +165,7 @@ extern PDRIVER_OBJECT HaxDriverObject;
 
 #define HAX_IOCTL_VCPU_DEBUG \
         CTL_CODE(HAX_DEVICE_TYPE, 0x916, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define HAX_VCPU_IOCTL_SET_CPUID \
+        CTL_CODE(HAX_DEVICE_TYPE, 0x917, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #endif // HAX_WINDOWS_HAX_ENTRY_H_

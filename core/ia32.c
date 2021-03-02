@@ -70,7 +70,7 @@ void ia32_wrmsr(uint32_t reg, uint64_t val)
 #endif
 }
 
-uint64_t rdtsc(void)
+uint64_t ia32_rdtsc(void)
 {
 #ifdef HAX_ARCH_X86_32
     struct qword_val val = { 0 };
@@ -81,17 +81,22 @@ uint64_t rdtsc(void)
 #endif
 }
 
-void fxinit(void)
+void hax_clts(void)
+{
+    asm_clts();
+}
+
+void hax_fxinit(void)
 {
     asm_fxinit();
 }
 
-void fxsave(mword *addr)
+void hax_fxsave(mword *addr)
 {
     asm_fxsave(addr);
 }
 
-void fxrstor(mword *addr)
+void hax_fxrstor(mword *addr)
 {
     asm_fxrstor(addr);
 }

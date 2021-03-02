@@ -31,6 +31,8 @@
 #ifndef HAX_CORE_CONFIG_H_
 #define HAX_CORE_CONFIG_H_
 
+#include "../../include/hax_types.h"
+
 struct config_t {
     int memory_pass_through;
     int disable_ept;
@@ -65,5 +67,13 @@ struct config_t {
 };
 
 #define HAX_MAX_VCPUS 16
+
+#ifdef HAX_PLATFORM_NETBSD
+// TODO: Handle 64 VMs
+#define HAX_MAX_VMS 8
+#else
+// Matches the number of bits in vm_mid_bits (see vm.c)
+#define HAX_MAX_VMS 64
+#endif
 
 #endif  // HAX_CORE_CONFIG_H_

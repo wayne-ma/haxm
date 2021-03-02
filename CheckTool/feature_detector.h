@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Intel Corporation
+ * Copyright (c) 2020 Intel Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -28,11 +28,45 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef HAX_CORE_DUMP_VMCS_H_
-#define HAX_CORE_DUMP_VMCS_H_
+#ifndef HAXM_CHECK_FEATURE_DETECTOR_H_
+#define HAXM_CHECK_FEATURE_DETECTOR_H_
 
-void dump_vmcs(struct vcpu_t *vcpu);
-void dump_vmcs_exit(void);
-int dump_vmcs_init(void);
+#include <string>
 
-#endif  // HAX_CORE_DUMP_VMCS_H_
+#include "common.h"
+#include "cpuid.h"
+#include "os.h"
+
+namespace haxm {
+namespace check_util {
+
+class FeatureDetector {
+public:
+    FeatureDetector();
+    ~FeatureDetector();
+    CheckResult Detect() const;
+    void Print() const;
+
+private:
+    CheckResult CheckCpuVendor(std::string* vendor = nullptr) const;
+    CheckResult CheckLongModeSupported() const;  // Long Mode = Intel64
+    CheckResult CheckVmxSupported() const;
+    CheckResult CheckVmxEnabled() const;
+    CheckResult CheckEptSupported() const;
+    CheckResult CheckNxSupported() const;
+    CheckResult CheckNxEnabled() const;
+    CheckResult CheckHyperVDisabled() const;
+    CheckResult CheckOsVersion(OsVersion* os_ver = nullptr) const;
+    CheckResult CheckOsArchitecture(OsArchitecture* os_arch = nullptr) const;
+    CheckResult CheckGuestOccupied(uint32_t* occupied_count = nullptr) const;
+    static std::string ToString(CheckResult res);
+    static std::string ToString(OsType os_type);
+    static std::string ToString(OsArchitecture os_arch);
+    Cpuid cpuid_;
+    Os* os_;
+};
+
+}  // namespace check_util
+}  // namespace haxm
+
+#endif  // HAXM_CHECK_FEATURE_DETECTOR_H_

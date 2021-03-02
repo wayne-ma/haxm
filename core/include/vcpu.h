@@ -31,6 +31,7 @@
 #ifndef HAX_CORE_VCPU_H_
 #define HAX_CORE_VCPU_H_
 
+#include "cpuid.h"
 #include "emulate.h"
 #include "vmx.h"
 #include "mtrr.h"
@@ -41,9 +42,18 @@
 
 #define NR_GMSR     5
 #define NR_EMT64MSR 6
+// The number of MSRs to be loaded on VM entries
+// Currently the MSRs list only supports automatic loading of below MSRs, the
+// total count of which is 14.
+// * IA32_PMCx
+// * IA32_PERFEVTSELx
+// * IA32_TSC_AUX
+// * all MSRs defined in gmsr_list[]
+#define NR_GMSR_AUTOLOAD 14
 
 struct gstate {
     struct vmx_msr gmsr[NR_GMSR];
+    vmx_msr_entry gmsr_autoload[NR_GMSR_AUTOLOAD];
     // IA32_PMCx, since APM v1
     uint64_t apm_pmc_msrs[APM_MAX_GENERAL_COUNT];
     // IA32_PERFEVTSELx, since APM v1
@@ -56,8 +66,8 @@ struct gstate {
 };
 
 struct cvtlb {
-    vaddr_t va;
-    paddr_t ha;
+    hax_vaddr_t va;
+    hax_paddr_t ha;
     uint64_t flags;
     uint guest_order;
     uint order;
@@ -72,7 +82,6 @@ struct vcpu_vmx_data {
     uint32_t pin_ctls_base;
     uint32_t pcpu_ctls_base;
     uint32_t scpu_ctls_base;
-    uint32_t entry_ctls_base;
     uint32_t exc_bitmap_base;
     uint32_t exit_ctls_base;
 
@@ -116,7 +125,7 @@ struct vcpu_post_mmio {
         /* Index to the register to write to (for VCPU_POST_MMIO_WRITE_REG) */
         uint8_t reg_index;
         /* GVA to write to (for VCPU_POST_MMIO_WRITE_MEM) */
-        vaddr_t va;
+        hax_vaddr_t va;
     };
     /* How to manipulate hax_fastmmio.value before use by |op| */
     enum {
@@ -133,7 +142,6 @@ struct vcpu_post_mmio {
     uint64_t value;
 };
 
-#ifdef CONFIG_HAX_EPT2
 struct mmio_fetch_cache {
     uint64_t last_gva;
     uint64_t last_guest_cr3;
@@ -141,15 +149,14 @@ struct mmio_fetch_cache {
     hax_kmap_user kmap;
     int hit_count;
 };
-#endif  // CONFIG_HAX_EPT2
 
 #define IOS_MAX_BUFFER 64
 
 struct vcpu_t {
     uint16_t vcpu_id;
-    uint16_t cpu_id;
+    uint32_t cpu_id;
     // Sometimes current thread might be migrated to other core.
-    uint16_t prev_cpu_id;
+    uint32_t prev_cpu_id;
     /*
      * VPID: Virtual Processor Identifier
      * VPIDs provide a way for software to identify to the processor
@@ -200,7 +207,8 @@ struct vcpu_t {
         uint64_t fs_base_dirty                   : 1;
         uint64_t interruptibility_dirty          : 1;
         uint64_t pcpu_ctls_dirty                 : 1;
-        uint64_t padding                         : 46;
+        uint64_t pae_pdpt_dirty                  : 1;
+        uint64_t padding                         : 45;
     };
 
     /* For TSC offseting feature*/
@@ -218,7 +226,6 @@ struct vcpu_t {
     uint64_t pae_pdptes[4];
 
     uint64_t cr_pat;
-    uint64_t cpuid_features_flag_mask;
 
     /* Debugging */
     uint32_t debug_control;
@@ -234,9 +241,15 @@ struct vcpu_t {
 
     struct em_context_t emulate_ctxt;
     struct vcpu_post_mmio post_mmio;
-#ifdef CONFIG_HAX_EPT2
     struct mmio_fetch_cache mmio_fetch;
-#endif  // CONFIG_HAX_EPT2
+
+    // Guest CPUID feature set
+    // * The CPUID feature set is always same for each vCPU. A CPUID instruction
+    //   executed on any core will get the same result.
+    // * All vCPUs share the unique memory, which is actually allocated by the
+    //   first vCPU created by VM. If any vCPU sets features in this field, all
+    //   vCPUs will change accordingly.
+    hax_cpuid_t *guest_cpuid;
 };
 
 #define vmx(v, field) v->vmx.field
@@ -262,6 +275,7 @@ int vcpu_get_fpu(struct vcpu_t *vcpu, struct fx_layout *fl);
 int vcpu_put_fpu(struct vcpu_t *vcpu, struct fx_layout *fl);
 int vcpu_get_msr(struct vcpu_t *vcpu, uint64_t entry, uint64_t *val);
 int vcpu_put_msr(struct vcpu_t *vcpu, uint64_t entry, uint64_t val);
+int vcpu_set_cpuid(struct vcpu_t *vcpu, hax_cpuid *cpuid_info);
 void vcpu_debug(struct vcpu_t *vcpu, struct hax_debug_t *debug);
 
 /* The declaration for OS wrapper code */
@@ -277,7 +291,7 @@ int vcpu_unpause(struct vcpu_t *vcpu);
 int vcpu_takeoff(struct vcpu_t *vcpu);
 
 void *vcpu_vmcs_va(struct vcpu_t *vcpu);
-paddr_t vcpu_vmcs_pa(struct vcpu_t *vcpu);
+hax_paddr_t vcpu_vmcs_pa(struct vcpu_t *vcpu);
 int set_vcpu_tunnel(struct vcpu_t *vcpu, struct hax_tunnel *tunnel,
                     uint8_t *iobuf);
 
@@ -289,8 +303,6 @@ static inline bool valid_vcpu_id(int vcpu_id)
 }
 
 bool vcpu_is_panic(struct vcpu_t *vcpu);
-#ifndef hax_panic_vcpu
-void hax_panic_vcpu(struct vcpu_t *v, char *fmt, ...);
-#endif
+void vcpu_set_panic(struct vcpu_t *vcpu);
 
 #endif  // HAX_CORE_VCPU_H_

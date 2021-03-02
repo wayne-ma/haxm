@@ -54,24 +54,25 @@ DRIVER_UNLOAD HaxUnloadDriver;
 
 static int hax_host_init(void)
 {
-    int i, ret;
-    cpu_online_map = KeQueryActiveProcessors();
+    int ret;
 
-    for (i = 0; i < (sizeof(ULONG_PTR) * 8); i++)
-        if (cpu_online_map & ((mword)0x1 << i))
-            max_cpus = i;
-
-    /* we get the max_cpus from real_cpus in darwin, so add 1 here */
-    max_cpus++;
+    ret = cpu_info_init();
+    if (ret < 0) {
+        hax_log(HAX_LOGE, "CPU info init failed\n");
+        return ret;
+    }
 
     ret = smpc_dpc_init();
     if (ret < 0) {
+        hax_log(HAX_LOGE, "SMPC DPC init failed\n");
+        cpu_info_exit();
         return ret;
     }
 
     if (hax_module_init() < 0) {
-            hax_error("Hax module init failed\n");
+            hax_log(HAX_LOGE, "Hax module init failed\n");
             smpc_dpc_exit();
+            cpu_info_exit();
             return -1;
     }
 
@@ -110,7 +111,7 @@ NTSTATUS DriverEntry(__in PDRIVER_OBJECT DriverObject,
                               FALSE,  // Not an exclusive device
                               &pDevObj);  // Returned ptr to Device Object
     if (!NT_SUCCESS(ntStatus)) {
-        DbgPrint("Couldn't create the device object\n");
+        hax_log(HAX_LOGE, "Couldn't create the device object\n");
         write_event(HaxDriverCreateUpDevFailure, DriverObject, NULL, 0);
         return ntStatus;
     }
@@ -126,7 +127,7 @@ NTSTATUS DriverEntry(__in PDRIVER_OBJECT DriverObject,
         //
         // Delete everything that this routine has allocated.
         //
-        DbgPrint("Couldn't create symbolic link\n");
+        hax_log(HAX_LOGE, "Couldn't create symbolic link\n");
         write_event(HaxDriverCreateUpSymFailure, DriverObject, NULL, 0);
         goto error_0;
     }
@@ -135,7 +136,7 @@ NTSTATUS DriverEntry(__in PDRIVER_OBJECT DriverObject,
     ret = hax_host_init();
     if (ret < 0) {
         ntStatus = STATUS_UNSUCCESSFUL;
-        hax_error("Hax host init failed\n");
+        hax_log(HAX_LOGE, "Hax host init failed\n");
         write_event(HaxDriverHostInitFailure, DriverObject, NULL, 0);
         goto error_1;
     }
@@ -191,7 +192,7 @@ NTSTATUS HaxClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     NTSTATUS ret = STATUS_SUCCESS;
     devext = (struct hax_dev_ext *)DeviceObject->DeviceExtension;
 
-    hax_log("HaxClose device %x at process %p\n", devext->type,
+    hax_log(HAX_LOGI, "HaxClose device %x at process %p\n", devext->type,
             (ULONG_PTR)PsGetCurrentThread());
     switch (devext->type) {
         case HAX_DEVEXT_TYPE_UP:
@@ -201,7 +202,7 @@ NTSTATUS HaxClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         case HAX_DEVEXT_TYPE_VM:
             vm = &devext->vmdev_ext;
             cvm = vm->cvm;
-            hax_log("Close VM %x\n", vm->vm_id);
+            hax_log(HAX_LOGI, "Close VM %x\n", vm->vm_id);
             if (cvm)
                 hax_put_vm(cvm);
             break;
@@ -209,8 +210,8 @@ NTSTATUS HaxClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             vcpu = &devext->vcpudev_ext;
             cvcpu = hax_get_vcpu(vcpu->vm_id, vcpu->vcpu_id, 1);
             if (!cvcpu) {
-                hax_error("Failed to get cvcpu for vm %x vcpu %x\n",
-                          vcpu->vm_id, vcpu->vcpu_id);
+                hax_log(HAX_LOGE, "Failed to get cvcpu for vm %x vcpu %x\n",
+                        vcpu->vm_id, vcpu->vcpu_id);
                 ret = STATUS_UNSUCCESSFUL;
                 goto done;
             }
@@ -218,7 +219,7 @@ NTSTATUS HaxClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             hax_put_vcpu(vcpu->cvcpu);
             break;
         default:
-            hax_error("Invalid device type %x\n", devext->type);
+            hax_log(HAX_LOGE, "Invalid device type %x\n", devext->type);
             ret = STATUS_UNSUCCESSFUL;
             break;
     }
@@ -320,9 +321,9 @@ NTSTATUS HaxVcpuControl(PDEVICE_OBJECT DeviceObject,
             for (i = 0; i < msrs->nr_msr; i++, msr++) {
                 fail = vcpu_set_msr(cvcpu, msr->entry, msr->value);
                 if (fail) {
-                    //  hax_log_level(HAX_LOGE,
-                    //                "Failed to set msr  %x index %x\n",
-                    //                msr->entry, i);
+                    //  hax_log(HAX_LOGE,
+                    //          "Failed to set msr  %x index %x\n",
+                    //          msr->entry, i);
                     break;
                 }
             }
@@ -430,11 +431,24 @@ NTSTATUS HaxVcpuControl(PDEVICE_OBJECT DeviceObject,
             vcpu_debug(cvcpu, (struct hax_debug_t*)inBuf);
             break;
         }
+        case HAX_VCPU_IOCTL_SET_CPUID: {
+            hax_cpuid *cpuid = (hax_cpuid *)inBuf;
+            if (inBufLength < sizeof(hax_cpuid) || inBufLength <
+                    sizeof(hax_cpuid) + cpuid->total *
+                    sizeof(hax_cpuid_entry)) {
+                ret = STATUS_INVALID_PARAMETER;
+                goto done;
+            }
+            if (vcpu_set_cpuid(cvcpu, cpuid)) {
+                ret = STATUS_UNSUCCESSFUL;
+            }
+            break;
+        }
         default:
-            hax_error("Unknow vcpu ioctl %lx\n",
-                      irpSp->Parameters.DeviceIoControl.IoControlCode);
-            hax_log("set regs ioctl %lx get regs %lx", HAX_VCPU_SET_REGS,
-                    HAX_VCPU_GET_REGS );
+            hax_log(HAX_LOGE, "Unknow vcpu ioctl %lx\n",
+                    irpSp->Parameters.DeviceIoControl.IoControlCode);
+            hax_log(HAX_LOGI, "set regs ioctl %lx get regs %lx",
+                    HAX_VCPU_SET_REGS, HAX_VCPU_GET_REGS );
             ret = STATUS_INVALID_PARAMETER;
             break;
     }
@@ -487,7 +501,8 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
             vm_id = vm->vm_id;
             cvcpu = vcpu_create(cvm, vm, vcpu_id);
             if (!cvcpu) {
-                hax_log("Failed to create vcpu %x on vm %x\n", vcpu_id, vm_id);
+                hax_log(HAX_LOGI, "Failed to create vcpu %x on vm %x\n",
+                        vcpu_id, vm_id);
                 ret = STATUS_UNSUCCESSFUL;
                 goto done;
             }
@@ -501,8 +516,8 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
                 goto done;
             }
             info = (struct hax_alloc_ram_info *)inBuf;
-            hax_info("IOCTL_ALLOC_RAM: vm_id=%d, va=0x%llx, size=0x%x,"
-                     " pad=0x%x\n", vm->vm_id, info->va, info->size, info->pad);
+            hax_log(HAX_LOGI, "IOCTL_ALLOC_RAM: vm_id=%d, va=0x%llx, size=0x%x,"
+                    " pad=0x%x\n", vm->vm_id, info->va, info->size, info->pad);
             if (hax_vm_add_ramblock(cvm, info->va, info->size)) {
                 ret = STATUS_UNSUCCESSFUL;
             }
@@ -511,20 +526,20 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
         case HAX_VM_IOCTL_ADD_RAMBLOCK: {
             struct hax_ramblock_info *info;
             if (inBufLength < sizeof(struct hax_ramblock_info)) {
-                hax_error("IOCTL_ADD_RAMBLOCK: inBufLength=%u < %u\n",
-                          inBufLength, sizeof(struct hax_ramblock_info));
+                hax_log(HAX_LOGE, "IOCTL_ADD_RAMBLOCK: inBufLength=%u < %u\n",
+                        inBufLength, sizeof(struct hax_ramblock_info));
                 ret = STATUS_INVALID_PARAMETER;
                 break;
             }
             info = (struct hax_ramblock_info *)inBuf;
             if (info->reserved) {
-                hax_error("IOCTL_ADD_RAMBLOCK: vm_id=%d, reserved=0x%llx\n",
-                          vm->vm_id, info->reserved);
+                hax_log(HAX_LOGE, "IOCTL_ADD_RAMBLOCK: vm_id=%d, "
+                        "reserved=0x%llx\n", vm->vm_id, info->reserved);
                 ret = STATUS_INVALID_PARAMETER;
                 break;
             }
-            hax_info("IOCTL_ADD_RAMBLOCK: vm_id=%d, start_va=0x%llx,"
-                     " size=0x%llx\n", vm->vm_id, info->start_va, info->size);
+            hax_log(HAX_LOGI, "IOCTL_ADD_RAMBLOCK: vm_id=%d, start_va=0x%llx,"
+                    " size=0x%llx\n", vm->vm_id, info->start_va, info->size);
             if (hax_vm_add_ramblock(cvm, info->start_va, info->size)) {
                 ret = STATUS_UNSUCCESSFUL;
             }
@@ -550,7 +565,6 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
             }
             break;
         }
-#ifdef CONFIG_HAX_EPT2
         case HAX_VM_IOCTL_SET_RAM2: {
             struct hax_set_ram_info2 *info;
             int res;
@@ -560,9 +574,9 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
             }
             info = (struct hax_set_ram_info2 *)inBuf;
             if (info->reserved1 || info->reserved2) {
-                hax_error("IOCTL_SET_RAM2: vm_id=%d, reserved1=0x%x"
-                          " reserved2=0xllx\n",
-                          vm->vm_id, info->reserved1, info->reserved2);
+                hax_log(HAX_LOGE, "IOCTL_SET_RAM2: vm_id=%d, reserved1=0x%x"
+                        " reserved2=0xllx\n",
+                        vm->vm_id, info->reserved1, info->reserved2);
                 ret = STATUS_INVALID_PARAMETER;
                 break;
             }
@@ -587,8 +601,8 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
             }
             info = (struct hax_protect_ram_info *)inBuf;
             if (info->reserved) {
-                hax_error("IOCTL_PROTECT_RAM: vm_id=%d, reserved=0x%x\n",
-                          vm->vm_id, info->reserved);
+                hax_log(HAX_LOGE, "IOCTL_PROTECT_RAM: vm_id=%d, "
+                        "reserved=0x%x\n", vm->vm_id, info->reserved);
                 ret = STATUS_INVALID_PARAMETER;
                 break;
             }
@@ -599,7 +613,6 @@ NTSTATUS HaxVmControl(PDEVICE_OBJECT DeviceObject, struct hax_vm_windows *ext,
             }
             break;
         }
-#endif
         case HAX_VM_IOCTL_NOTIFY_QEMU_VERSION: {
             struct hax_qemu_version *info;
 
@@ -693,7 +706,7 @@ NTSTATUS HaxDeviceControl(PDEVICE_OBJECT DeviceObject,
             }
             cvm = hax_create_vm(&vm_id);
             if (!cvm) {
-                hax_log_level(HAX_LOGE, "Failed to create the HAX VM\n");
+                hax_log(HAX_LOGE, "Failed to create the HAX VM\n");
                 ret =  STATUS_UNSUCCESSFUL;
                 break;
             }
@@ -703,8 +716,8 @@ NTSTATUS HaxDeviceControl(PDEVICE_OBJECT DeviceObject,
             break;
         default:
             ret = STATUS_INVALID_DEVICE_REQUEST;
-            hax_log_level(HAX_LOGE, "Invalid hax ioctl %x\n",
-                          irpSp->Parameters.DeviceIoControl.IoControlCode);
+            hax_log(HAX_LOGE, "Invalid hax ioctl %x\n",
+                    irpSp->Parameters.DeviceIoControl.IoControlCode);
             break;
     }
 done:
@@ -744,7 +757,7 @@ VOID HaxUnloadDriver(__in PDRIVER_OBJECT DriverObject)
     RtlInitUnicodeString(&ntWin32NameString, DOS_DEVICE_NAME);
     IoDeleteSymbolicLink(&ntWin32NameString);
     IoDeleteDevice(HaxDeviceObject);
-    hax_log("Unload the driver\n");
+    hax_log(HAX_LOGI, "Unload the driver\n");
     hax_host_exit();
     write_event(HaxDriverUnloaded, DriverObject, NULL, 0);
     HaxDeviceObject = NULL;

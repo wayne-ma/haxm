@@ -42,6 +42,12 @@
 #ifdef HAX_PLATFORM_DARWIN
 #include "darwin/hax_interface_mac.h"
 #endif
+#ifdef HAX_PLATFORM_LINUX
+#include "linux/hax_interface_linux.h"
+#endif
+#ifdef HAX_PLATFORM_NETBSD
+#include "netbsd/hax_interface_netbsd.h"
+#endif
 #ifdef HAX_PLATFORM_WINDOWS
 #include "windows/hax_interface_windows.h"
 #endif
@@ -122,13 +128,13 @@ struct hax_tunnel {
             uint8_t _pad0;
             uint16_t _pad1;
             uint32_t _pad2;
-            vaddr_t _vaddr;
+            hax_vaddr_t _vaddr;
         } io;
         struct {
-            paddr_t gla;
+            hax_paddr_t gla;
         } mmio;
         struct {
-            paddr_t gpa;
+            hax_paddr_t gpa;
 #define HAX_PAGEFAULT_ACC_R  (1 << 0)
 #define HAX_PAGEFAULT_ACC_W  (1 << 1)
 #define HAX_PAGEFAULT_ACC_X  (1 << 2)
@@ -140,7 +146,7 @@ struct hax_tunnel {
             uint64_t reserved2;
         } pagefault;
         struct {
-            paddr_t dummy;
+            hax_paddr_t dummy;
         } state;
         struct {
             uint64_t rip;
@@ -152,10 +158,10 @@ struct hax_tunnel {
 } PACKED;
 
 struct hax_fastmmio {
-    paddr_t gpa;
+    hax_paddr_t gpa;
     union {
         uint64_t value;
-        paddr_t gpa2;  /* since API v4 */
+        hax_paddr_t gpa2;  /* since API v4 */
     };
     uint8_t size;
     uint8_t direction;
@@ -187,6 +193,8 @@ struct hax_module_version {
 #define HAX_CAP_TUNNEL_PAGE        (1 << 5)
 #define HAX_CAP_RAM_PROTECTION     (1 << 6)
 #define HAX_CAP_DEBUG              (1 << 7)
+#define HAX_CAP_IMPLICIT_RAMBLOCK  (1 << 8)
+#define HAX_CAP_CPUID              (1 << 9)
 
 struct hax_capabilityinfo {
     /*
@@ -234,8 +242,13 @@ struct hax_ramblock_info {
     uint64_t reserved;
 } PACKED;
 
-#define HAX_RAM_INFO_ROM     0x01  // read-only
-#define HAX_RAM_INFO_INVALID 0x80  // unmapped, usually used for MMIO
+// Read-only mapping
+#define HAX_RAM_INFO_ROM (1 << 0)
+// Stand-alone mapping into a new HVA range
+#define HAX_RAM_INFO_STANDALONE (1 << 6)
+
+// Unmapped, usually used for MMIO
+#define HAX_RAM_INFO_INVALID (1 << 7)
 
 struct hax_set_ram_info {
     uint64_t pa_start;
@@ -284,5 +297,29 @@ struct hax_debug_t {
     uint32_t reserved;
     uint64_t dr[8];
 } PACKED;
+
+#define HAX_MAX_CPUID_ENTRIES 0x40
+
+typedef struct hax_cpuid_entry {
+    uint32_t function;
+    uint32_t index;
+    uint32_t flags;
+    uint32_t eax;
+    uint32_t ebx;
+    uint32_t ecx;
+    uint32_t edx;
+    uint32_t pad[3];
+} hax_cpuid_entry;
+
+// `hax_cpuid` is a variable-length type. The size of `hax_cpuid` itself is only
+// 8 bytes. `entries` is just a body placeholder, which will not actually occupy
+// memory. The accessible memory of `entries` is decided by the allocation from
+// user space, and the array length is specified by `total`.
+
+typedef struct hax_cpuid {
+    uint32_t total;
+    uint32_t pad;
+    hax_cpuid_entry entries[0];
+} hax_cpuid;
 
 #endif  // HAX_INTERFACE_H_

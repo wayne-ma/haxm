@@ -68,19 +68,19 @@ int hax_setup_vcpumem(struct hax_vcpu_mem *mem, uint64_t uva, uint32_t size,
         md = IOMemoryDescriptor::withAddressRange(uva, size, options,
                                                   current_task());
         if (!md) {
-            hax_error("Failed to create mapping for %llx\n", uva);
+            hax_log(HAX_LOGE, "Failed to create mapping for %llx\n", uva);
             goto error;
         }
 
         result = md->prepare();
         if (result != KERN_SUCCESS) {
-            hax_error("Failed to prepare\n");
+            hax_log(HAX_LOGE, "Failed to prepare\n");
             goto error;
         }
 
         mm = md->createMappingInTask(kernel_task, 0, kIOMapAnywhere, 0, size);
         if (!mm) {
-            hax_error("Failed to map into kernel\n");
+            hax_log(HAX_LOGE, "Failed to map into kernel\n");
             md->complete();
             goto error;
         }
@@ -147,30 +147,8 @@ extern "C" int hax_clear_vcpumem(struct hax_vcpu_mem *mem)
     return 0;
 }
 
-extern "C" uint64_t get_hpfn_from_pmem(struct hax_vcpu_mem *pmem, uint64_t va)
-{
-    uint64_t phys;
-    uint64_t length;
-    struct darwin_vcpu_mem *hinfo;
-
-    if (!pmem || !pmem->hinfo)
-        return 0;
-    if (!in_pmem_range(pmem, va))
-        return 0;
-
-    hinfo = (struct darwin_vcpu_mem *)pmem->hinfo;
-    phys = hinfo->md->getPhysicalSegment((va - pmem->uva),
-                                         (IOByteCount *)&length,
-                                         kIOMemoryMapperNone);
-    return phys >> page_shift;
-}
-
 /* In darwin, we depend on boot code to set the limit */
 extern "C" uint64_t hax_get_memory_threshold(void) {
-#ifdef CONFIG_HAX_EPT2
     // Since there is no memory cap, just return a sufficiently large value
     return 1ULL << 48;  // PHYSADDR_MAX + 1
-#else  // !CONFIG_HAX_EPT2
-    return 0;
-#endif  // CONFIG_HAX_EPT2
 }

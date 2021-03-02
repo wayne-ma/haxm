@@ -36,6 +36,17 @@
 
 #include "../core/include/emulate.h"
 
+/* Immediate types */
+template <int N>
+struct imm_t;
+template <> struct imm_t<8>  { int8_t  val; };
+template <> struct imm_t<16> { int16_t val; };
+template <> struct imm_t<32> { int32_t val; };
+template <> struct imm_t<64> { int32_t val; };
+
+template <int N>
+using imm = decltype(imm_t<N>::val);
+
 /* Emulator operations */
 struct test_cpu_t {
     uint64_t gpr[16];
@@ -44,23 +55,20 @@ struct test_cpu_t {
     uint8_t mem[0x100];
 };
 
-uint64_t test_read_gpr(void* obj, uint32_t reg_index, uint32_t size) {
+uint64_t test_read_gpr(void* obj, uint32_t reg_index) {
     test_cpu_t* vcpu = reinterpret_cast<test_cpu_t*>(obj);
     if (reg_index >= 16) {
         throw std::exception("Register index OOB");
     }
-    uint64_t value = 0;
-    memcpy(&value, &vcpu->gpr[reg_index], size);
-    return value;
+    return vcpu->gpr[reg_index];
 }
 
-void test_write_gpr(void* obj, uint32_t reg_index,
-                    uint64_t value, uint32_t size) {
+void test_write_gpr(void* obj, uint32_t reg_index, uint64_t value) {
     test_cpu_t* vcpu = reinterpret_cast<test_cpu_t*>(obj);
     if (reg_index >= 16) {
         throw std::exception("Register index OOB");
     }
-    memcpy(&vcpu->gpr[reg_index], &value, size);
+    vcpu->gpr[reg_index] = value;
 }
 
 uint64_t test_read_rflags(void* obj) {
@@ -86,7 +94,6 @@ void test_advance_rip(void* obj, uint64_t len) {
 em_status_t test_read_memory(void* obj, uint64_t ea, uint64_t* value,
                              uint32_t size, uint32_t flags) {
     test_cpu_t* vcpu = reinterpret_cast<test_cpu_t*>(obj);
-    ea &= 0xFF;
     if (ea + size >= 0x100) {
         return EM_ERROR;
     }
@@ -112,7 +119,6 @@ em_status_t test_read_memory(void* obj, uint64_t ea, uint64_t* value,
 em_status_t test_write_memory(void* obj, uint64_t ea, uint64_t* value,
                               uint32_t size, uint32_t flags) {
     test_cpu_t* vcpu = reinterpret_cast<test_cpu_t*>(obj);
-    ea &= 0xFF;
     if (ea + size > 0x100) {
         return EM_ERROR;
     }
@@ -138,7 +144,9 @@ em_status_t test_write_memory(void* obj, uint64_t ea, uint64_t* value,
 /* Test class */
 class EmulatorTest : public testing::Test {
 private:
-    ks_engine* ks;
+    ks_engine* ks_x86_16;
+    ks_engine* ks_x86_32;
+    ks_engine* ks_x86_64;
     test_cpu_t vcpu;
     em_context_t em_ctxt;
     em_vcpu_ops_t em_ops;
@@ -146,11 +154,12 @@ private:
 protected:
     virtual void SetUp() {
         // Initialize assembler
-        ks_err err;
-        err = ks_open(KS_ARCH_X86, KS_MODE_64, &ks);
-        ASSERT_EQ(err, KS_ERR_OK);
-        err = ks_option(ks, KS_OPT_SYNTAX, KS_OPT_SYNTAX_INTEL);
-        ASSERT_EQ(err, KS_ERR_OK);
+        ASSERT_EQ(KS_ERR_OK, ks_open(KS_ARCH_X86, KS_MODE_16, &ks_x86_16));
+        ASSERT_EQ(KS_ERR_OK, ks_open(KS_ARCH_X86, KS_MODE_32, &ks_x86_32));
+        ASSERT_EQ(KS_ERR_OK, ks_open(KS_ARCH_X86, KS_MODE_64, &ks_x86_64));
+        ASSERT_EQ(KS_ERR_OK, ks_option(ks_x86_16, KS_OPT_SYNTAX, KS_OPT_SYNTAX_INTEL));
+        ASSERT_EQ(KS_ERR_OK, ks_option(ks_x86_32, KS_OPT_SYNTAX, KS_OPT_SYNTAX_INTEL));
+        ASSERT_EQ(KS_ERR_OK, ks_option(ks_x86_64, KS_OPT_SYNTAX, KS_OPT_SYNTAX_INTEL));
 
         // Initialize emulator
         em_ops.read_gpr = test_read_gpr;
@@ -162,45 +171,132 @@ protected:
         em_ops.read_memory = test_read_memory;
         em_ops.write_memory = test_write_memory;
         em_ctxt.ops = &em_ops;
-        em_ctxt.mode = EM_MODE_PROT64;
         em_ctxt.vcpu = &vcpu;
         em_ctxt.rip = 0;
     }
 
-    void assemble_decode(const char* insn,
+    void assemble_decode(em_mode_t mode,
+                         const char* insn,
                          uint64_t rip,
                          size_t* size,
                          size_t* count,
                          em_status_t* decode_status) {
+        ks_engine* ks = nullptr;
         uint8_t* code;
-        int err;
 
-        err = ks_asm(ks, insn, 0, &code, size, count);
-        ASSERT_TRUE(err == 0);
-        EXPECT_TRUE(*size != 0);
-        EXPECT_TRUE(*count != 0);
+        switch (mode) {
+        case EM_MODE_PROT16:
+            ks = ks_x86_16;
+            break;
+        case EM_MODE_PROT32:
+            ks = ks_x86_32;
+            break;
+        case EM_MODE_PROT64:
+            ks = ks_x86_64;
+            break;
+        default:
+            GTEST_FAIL();
+        }
+        ASSERT_EQ(KS_ERR_OK, ks_asm(ks, insn, 0, &code, size, count));
+        EXPECT_NE(*size, 0);
+        EXPECT_NE(*count, 0);
 
         em_ctxt.rip = rip;
+        em_ctxt.mode = mode;
         *decode_status = em_decode_insn(&em_ctxt, code);
         // code == em_ctxt->insn should never be used after em_decode_insn()
         ks_free(code);
     }
 
-    void run(const char* insn,
-             const test_cpu_t& vcpu_original,
-             const test_cpu_t& vcpu_expected) {
+    void run_mode(em_mode_t mode,
+                  const char* insn,
+                  const test_cpu_t& vcpu_original,
+                  const test_cpu_t& vcpu_expected) {
         size_t count;
         size_t size;
         em_status_t ret = EM_ERROR;
 
         vcpu = vcpu_original;
-        assemble_decode(insn, vcpu.rip, &size, &count, &ret);
-        ASSERT_TRUE(ret != EM_ERROR);
+        assemble_decode(mode, insn, vcpu.rip, &size, &count, &ret);
+        ASSERT_NE(ret, EM_ERROR)
+            << "em_decode_insn failed on: " << insn << "\n";
         ret = em_emulate_insn(&em_ctxt);
-        ASSERT_TRUE(ret != EM_ERROR);
-        EXPECT_TRUE(vcpu.rip == vcpu_original.rip + size);
+        ASSERT_NE(ret, EM_ERROR)
+            << "em_emulate_insn failed on: " << insn << "\n";
+
+        // Verify results
+        EXPECT_EQ(vcpu.rip, vcpu_original.rip + size)
+            << "Instruction pointer mismatch on: " << insn << "\n";
         vcpu.rip = vcpu_expected.rip;
-        EXPECT_EQ(memcmp(&vcpu, &vcpu_expected, sizeof(test_cpu_t)), 0);
+        verify(insn, vcpu, vcpu_expected);
+    }
+
+    void run_prot16(const char* insn,
+                    const test_cpu_t& vcpu_original,
+                    const test_cpu_t& vcpu_expected) {
+        run_mode(EM_MODE_PROT16, insn, vcpu_original, vcpu_expected);
+    }
+
+    void run_prot32(const char* insn,
+                    const test_cpu_t& vcpu_original,
+                    const test_cpu_t& vcpu_expected) {
+        run_mode(EM_MODE_PROT32, insn, vcpu_original, vcpu_expected);
+    }
+
+    void run_prot64(const char* insn,
+                    const test_cpu_t& vcpu_original,
+                    const test_cpu_t& vcpu_expected) {
+        run_mode(EM_MODE_PROT64, insn, vcpu_original, vcpu_expected);
+    }
+
+    void run(const char* insn,
+             const test_cpu_t& vcpu_original,
+             const test_cpu_t& vcpu_expected) {
+        // Default to x86-64 protected mode
+        run_prot64(insn, vcpu_original, vcpu_expected);
+    }
+
+    void verify(const char* insn,
+                const test_cpu_t& vcpu_obtained,
+                const test_cpu_t& vcpu_expected) {
+        // Helpers
+#define PRINT_U64(value) \
+        std::hex << std::uppercase << std::setfill('0') << std::setw(16) << value
+#define VERIFY_GPR(reg) \
+        if (vcpu_obtained.gpr[reg] != vcpu_expected.gpr[reg]) \
+            std::cerr << "Register mismatch on: " << insn << "\n" \
+                << "vcpu_obtained.gpr[" #reg "]: 0x" << PRINT_U64(vcpu_obtained.gpr[reg]) << "\n" \
+                << "vcpu_expected.gpr[" #reg "]: 0x" << PRINT_U64(vcpu_expected.gpr[reg]) << "\n";
+
+        // Verify GPRs
+        VERIFY_GPR(REG_RAX);
+        VERIFY_GPR(REG_RCX);
+        VERIFY_GPR(REG_RDX);
+        VERIFY_GPR(REG_RBX);
+        VERIFY_GPR(REG_RSP);
+        VERIFY_GPR(REG_RBP);
+        VERIFY_GPR(REG_RSI);
+        VERIFY_GPR(REG_RDI);
+        VERIFY_GPR(REG_R8);
+        VERIFY_GPR(REG_R9);
+        VERIFY_GPR(REG_R10);
+        VERIFY_GPR(REG_R11);
+        VERIFY_GPR(REG_R12);
+        VERIFY_GPR(REG_R13);
+        VERIFY_GPR(REG_R14);
+        VERIFY_GPR(REG_R15);
+
+        // Verify RFLAGS
+        if (vcpu_obtained.flags != vcpu_expected.flags)
+            std::cerr << "Flags mismatch on: " << insn << "\n"
+                << "vcpu_obtained.flags: 0x" << PRINT_U64(vcpu_obtained.flags) << "\n"
+                << "vcpu_expected.flags: 0x" << PRINT_U64(vcpu_expected.flags) << "\n";
+
+#undef PRINT_U64
+#undef VERIFY_GPR
+
+        // Ensure identical state
+        ASSERT_EQ(memcmp(&vcpu, &vcpu_expected, sizeof(test_cpu_t)), 0);
     }
 
     /* Test cases */
@@ -273,20 +369,19 @@ protected:
         size_t count;
         em_status_t ret = EM_CONTINUE;
 
-        assemble_decode(insn, 0, &size, &count, &ret);
+        assemble_decode(EM_MODE_PROT64, insn, 0, &size, &count, &ret);
         // Decoding should fail
         EXPECT_LT(ret, 0);
     }
 
-    template <int N>
-    void test_insn_rN_rN(const char* insn_name,
-                         const std::vector<test_alu_2op_t>& tests,
-                         bool readonly_dst = false) {
+    template <int N, int M=N>
+    void test_insn_rN_rM(const char* insn_name,
+                         const std::vector<test_alu_2op_t>& tests) {
         char insn[256];
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
         snprintf(insn, sizeof(insn), "%s %s, %s", insn_name,
-            gpr<N>(REG_RDX), gpr<N>(REG_RCX));
+                 gpr<N>(REG_RDX), gpr<M>(REG_RCX));
 
         // Run tests
         for (const auto& test : tests) {
@@ -295,17 +390,15 @@ protected:
             vcpu_original.gpr[REG_RCX] = test.in_src;
             vcpu_original.flags = test.in_flags;
             vcpu_expected = vcpu_original;
-            if (!readonly_dst)
-                vcpu_expected.gpr[REG_RDX] = test.out_dst;
+            vcpu_expected.gpr[REG_RDX] = test.out_dst;
             vcpu_expected.flags = test.out_flags;
             run(insn, vcpu_original, vcpu_expected);
         }
     }
 
-    template <int N>
-    void test_insn_rN_iN(const char* insn_name,
-                         const std::vector<test_alu_2op_t>& tests,
-                         bool readonly_dst = false) {
+    template <int N, int M=N>
+    void test_insn_rN_iM(const char* insn_name,
+                         const std::vector<test_alu_2op_t>& tests) {
         char insn[256];
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
@@ -313,22 +406,20 @@ protected:
         // Run tests
         for (const auto& test : tests) {
             snprintf(insn, sizeof(insn), "%s %s, %d", insn_name,
-                gpr<N>(REG_RAX), (uint32_t)test.in_src);
+                     gpr<N>(REG_RAX), (imm<M>)test.in_src);
             vcpu_original = {};
             vcpu_original.gpr[REG_RAX] = test.in_dst;
             vcpu_original.flags = test.in_flags;
             vcpu_expected = vcpu_original;
-            if (!readonly_dst)
-                vcpu_expected.gpr[REG_RAX] = test.out_dst;
+            vcpu_expected.gpr[REG_RAX] = test.out_dst;
             vcpu_expected.flags = test.out_flags;
             run(insn, vcpu_original, vcpu_expected);
         }
     }
 
-    template <int N>
-    void test_insn_mN_iN(const char* insn_name,
-                         const std::vector<test_alu_2op_t>& tests,
-                         bool readonly_dst = false) {
+    template <int N, int M=N>
+    void test_insn_mN_iM(const char* insn_name,
+                         const std::vector<test_alu_2op_t>& tests) {
         char insn[256];
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
@@ -336,29 +427,27 @@ protected:
         // Run tests
         for (const auto& test : tests) {
             snprintf(insn, sizeof(insn), "%s %s ptr [edx + 2*ecx + 0x10], %d",
-                insn_name, mem<N>(), (uint32_t)test.in_src);
+                     insn_name, mem<N>(), (imm<M>)test.in_src);
             vcpu_original = {};
             vcpu_original.gpr[REG_RDX] = 0x20;
             vcpu_original.gpr[REG_RCX] = 0x08;
             (uint64_t&)vcpu_original.mem[0x40] = test.in_dst;
             vcpu_original.flags = test.in_flags;
             vcpu_expected = vcpu_original;
-            if (!readonly_dst)
-                (uint64_t&)vcpu_expected.mem[0x40] = test.out_dst;
+            (uint64_t&)vcpu_expected.mem[0x40] = test.out_dst;
             vcpu_expected.flags = test.out_flags;
             run(insn, vcpu_original, vcpu_expected);
         }
     }
 
-    template <int N>
-    void test_insn_rN_mN(const char* insn_name,
-                         const std::vector<test_alu_2op_t>& tests,
-                         bool readonly_dst = false) {
+    template <int N, int M=N>
+    void test_insn_rN_mM(const char* insn_name,
+                         const std::vector<test_alu_2op_t>& tests) {
         char insn[256];
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
         snprintf(insn, sizeof(insn), "%s %s, %s ptr [edx + 2*ecx + 0x10]",
-            insn_name, gpr<N>(REG_RAX), mem<N>());
+                 insn_name, gpr<N>(REG_RAX), mem<M>());
 
         // Run tests
         for (const auto& test : tests) {
@@ -369,22 +458,20 @@ protected:
             vcpu_original.gpr[REG_RAX] = test.in_dst;
             vcpu_original.flags = test.in_flags;
             vcpu_expected = vcpu_original;
-            if (!readonly_dst)
-                vcpu_expected.gpr[REG_RAX] = test.out_dst;
+            vcpu_expected.gpr[REG_RAX] = test.out_dst;
             vcpu_expected.flags = test.out_flags;
             run(insn, vcpu_original, vcpu_expected);
         }
     }
 
-    template <int N>
-    void test_insn_mN_rN(const char* insn_name,
-                         const std::vector<test_alu_2op_t>& tests,
-                         bool readonly_dst = false) {
+    template <int N, int M=N>
+    void test_insn_mN_rM(const char* insn_name,
+                         const std::vector<test_alu_2op_t>& tests) {
         char insn[256];
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
         snprintf(insn, sizeof(insn), "%s %s ptr [edx + 2*ecx + 0x10], %s",
-            insn_name, mem<N>(), gpr<N>(REG_RAX));
+                 insn_name, mem<N>(), gpr<M>(REG_RAX));
 
         // Run tests
         for (const auto& test : tests) {
@@ -395,8 +482,7 @@ protected:
             (uint64_t&)vcpu_original.mem[0x40] = test.in_dst;
             vcpu_original.flags = test.in_flags;
             vcpu_expected = vcpu_original;
-            if (!readonly_dst)
-                (uint64_t&)vcpu_expected.mem[0x40] = test.out_dst;
+            (uint64_t&)vcpu_expected.mem[0x40] = test.out_dst;
             vcpu_expected.flags = test.out_flags;
             run(insn, vcpu_original, vcpu_expected);
         }
@@ -409,7 +495,7 @@ protected:
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
         snprintf(insn, sizeof(insn), "%s %s, %s, %s", insn_name,
-            gpr<N>(REG_RAX), gpr<N>(REG_RCX), gpr<N>(REG_RDX));
+                 gpr<N>(REG_RAX), gpr<N>(REG_RCX), gpr<N>(REG_RDX));
 
         // Run tests
         for (const auto& test : tests) {
@@ -432,7 +518,7 @@ protected:
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
         snprintf(insn, sizeof(insn), "%s %s, %s ptr [edx + 2*ecx + 0x10], %s",
-            insn_name, gpr<N>(REG_RAX), mem<N>(), gpr<N>(REG_RBX));
+                 insn_name, gpr<N>(REG_RAX), mem<N>(), gpr<N>(REG_RBX));
 
         // Run tests
         for (const auto& test : tests) {
@@ -457,7 +543,7 @@ protected:
         test_cpu_t vcpu_original;
         test_cpu_t vcpu_expected;
         snprintf(insn, sizeof(insn), "%s %s, %s, %s ptr [edx + 2*ecx + 0x10]",
-            insn_name, gpr<N>(REG_RAX), gpr<N>(REG_RBX), mem<N>());
+                 insn_name, gpr<N>(REG_RAX), gpr<N>(REG_RBX), mem<N>());
 
         // Run tests
         for (const auto& test : tests) {
@@ -481,11 +567,23 @@ protected:
         if (N == 64 && sizeof(void*) < 8) {
             return;
         }
-        test_insn_rN_rN<N>(insn_name, tests, false);
-        test_insn_rN_iN<N>(insn_name, tests, false);
-        test_insn_mN_iN<N>(insn_name, tests, false);
-        test_insn_rN_mN<N>(insn_name, tests, false);
-        test_insn_mN_rN<N>(insn_name, tests, false);
+        test_insn_rN_rM<N>(insn_name, tests);
+        test_insn_rN_iM<N>(insn_name, tests);
+        test_insn_mN_iM<N>(insn_name, tests);
+        test_insn_rN_mM<N>(insn_name, tests);
+        test_insn_mN_rM<N>(insn_name, tests);
+    }
+
+    template <int N>
+    void test_bt(const char* insn_name,
+                 const std::vector<test_alu_2op_t>& tests) {
+        if (N == 64 && sizeof(void*) < 8) {
+            return;
+        }
+        // Only bit-test variants that implicitly use bit offset modulo width.
+        test_insn_rN_rM<N>(insn_name, tests);
+        test_insn_rN_iM<N,8>(insn_name, tests);
+        test_insn_mN_iM<N,8>(insn_name, tests);
     }
 
     template <int N>
@@ -496,8 +594,8 @@ protected:
         // TEST is similar to AND, except that:
         // a) The destination operand is read-only.
         // b) Not all operand combinations are possible/implemented.
-        test_insn_mN_iN<N>("test", tests, true);
-        test_insn_mN_rN<N>("test", tests, true);
+        test_insn_mN_iM<N>("test", tests);
+        test_insn_mN_rM<N>("test", tests);
     }
 };
 
@@ -561,30 +659,6 @@ TEST_F(EmulatorTest, insn_and) {
     });
 }
 
-TEST_F(EmulatorTest, insn_test) {
-    test_test<8>({
-        { 0x55, 0xF0, RFLAGS_CF,
-          0x50, RFLAGS_PF },
-        { 0xF0, 0x0F, RFLAGS_OF,
-          0x00, RFLAGS_PF | RFLAGS_ZF },
-    });
-    test_test<16>({
-        { 0x0001, 0xF00F, RFLAGS_CF | RFLAGS_OF,
-          0x0001, 0 },
-        { 0xFF00, 0xF0F0, 0,
-          0xF000, RFLAGS_PF | RFLAGS_SF },
-    });
-    test_test<32>({
-        { 0xFFFF0001, 0xFFFF0001, 0,
-          0xFFFF0001, RFLAGS_SF },
-    });
-    test_test<64>({
-        { 0x0000FFFF'F0F0FFFFULL, 0xFFFF0000'0F0F0000ULL, 0,
-          0x00000000'00000000ULL, RFLAGS_PF | RFLAGS_ZF },
-    });
-}
-
-
 TEST_F(EmulatorTest, insn_andn) {
     const std::vector<test_alu_3op_t> tests32 = {
         { 0x00000000'00000000, 0xF0F0F0F0'F0F0F0F0, 0xFF00FF00'FF00FF00, 0,
@@ -619,6 +693,213 @@ TEST_F(EmulatorTest, insn_bextr) {
           0x00000000'0000FFF0, 0 }};
     test_insn_rN_rN_rN<64>("bextr", tests64);
     test_insn_rN_mN_rN<64>("bextr", tests64);
+}
+
+TEST_F(EmulatorTest, insn_bt) {
+    test_bt<16>("bt", {
+        { 0xFFFE, 0x00, RFLAGS_CF,
+          0xFFFE, 0 },
+        { 0x0200, 0x09, 0,
+          0x0200, RFLAGS_CF },
+        });
+    test_bt<32>("bt", {
+        { 0xFF7FFFFF, 0x17, 0,
+          0xFF7FFFFF, 0 },
+        { 0xFFFF0000, 0x3F, RFLAGS_CF,
+          0xFFFF0000, RFLAGS_CF },
+        });
+    test_bt<64>("bt", {
+        { 0x00000000'FFFFFFFFULL, 0x20, RFLAGS_CF,
+          0x00000000'FFFFFFFFULL, 0 },
+        { 0x80000000'00000000ULL, 0xFF, 0,
+          0x80000000'00000000ULL, RFLAGS_CF },
+        });
+
+    // Variant `bt mN,rN`: Modifies the EA based on the bit offset.
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RCX] = 0ULL;
+    (uint64_t&)vcpu_original.mem[0x00] = 0x00020000'00000000;
+    (uint64_t&)vcpu_original.mem[0x08] = 0x00000000'00000000;
+    (uint64_t&)vcpu_original.mem[0x10] = 0xFFFFFFFF'FFFFFFFE;
+    
+    vcpu_original.gpr[REG_RAX] = -15LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags |= RFLAGS_CF;
+    run("bt [ecx + 0x08], eax", vcpu_original, vcpu_expected);
+    vcpu_original.gpr[REG_RAX] = +64LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags &= ~RFLAGS_CF;
+    run("bt [rcx + 0x08], rax", vcpu_original, vcpu_expected);
+}
+
+TEST_F(EmulatorTest, insn_btc) {
+    test_bt<16>("btc", {
+        { 0xFFFE, 0x00, RFLAGS_CF,
+          0xFFFF, 0 },
+        { 0x0200, 0x09, 0,
+          0x0000, RFLAGS_CF },
+        });
+    test_bt<32>("btc", {
+        { 0xFF7FFFFF, 0x17, 0,
+          0xFFFFFFFF, 0 },
+        { 0xFFFF0000, 0x3F, RFLAGS_CF,
+          0x7FFF0000, RFLAGS_CF },
+        });
+    test_bt<64>("btc", {
+        { 0x00000000'FFFFFFFFULL, 0x20, RFLAGS_CF,
+          0x00000001'FFFFFFFFULL, 0 },
+        { 0x80000000'00000000ULL, 0xFF, 0,
+          0x00000000'00000000ULL, RFLAGS_CF },
+        });
+
+    // Variant `btc mN,rN`: Modifies the EA based on the bit offset.
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RCX] = 0ULL;
+    (uint64_t&)vcpu_original.mem[0x00] = 0x00020000'00000000;
+    (uint64_t&)vcpu_original.mem[0x08] = 0x00000000'00000000;
+    (uint64_t&)vcpu_original.mem[0x10] = 0xFFFFFFFF'FFFFFFFE;
+
+    vcpu_original.gpr[REG_RAX] = -15LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags |= RFLAGS_CF;
+    (uint64_t&)vcpu_expected.mem[0x00] = 0x00000000'00000000;
+    run("btc [ecx + 0x08], eax", vcpu_original, vcpu_expected);
+    vcpu_original.gpr[REG_RAX] = +64LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags &= ~RFLAGS_CF;
+    (uint64_t&)vcpu_expected.mem[0x10] = 0xFFFFFFFF'FFFFFFFF;
+    run("btc [rcx + 0x08], rax", vcpu_original, vcpu_expected);
+}
+
+TEST_F(EmulatorTest, insn_btr) {
+    test_bt<16>("btr", {
+        { 0xFFFE, 0x00, RFLAGS_CF,
+          0xFFFE, 0 },
+        { 0x0200, 0x09, 0,
+          0x0000, RFLAGS_CF },
+        });
+    test_bt<32>("btr", {
+        { 0xFF7FFFFF, 0x17, 0,
+          0xFF7FFFFF, 0 },
+        { 0xFFFF0000, 0x3F, RFLAGS_CF,
+          0x7FFF0000, RFLAGS_CF },
+        });
+    test_bt<64>("btr", {
+        { 0x00000000'FFFFFFFFULL, 0x20, RFLAGS_CF,
+          0x00000000'FFFFFFFFULL, 0 },
+        { 0x80000000'00000000ULL, 0xFF, 0,
+          0x00000000'00000000ULL, RFLAGS_CF },
+        });
+
+    // Variant `btr mN,rN`: Modifies the EA based on the bit offset.
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RCX] = 0ULL;
+    (uint64_t&)vcpu_original.mem[0x00] = 0x00020000'00000000;
+    (uint64_t&)vcpu_original.mem[0x08] = 0x00000000'00000000;
+    (uint64_t&)vcpu_original.mem[0x10] = 0xFFFFFFFF'FFFFFFFE;
+
+    vcpu_original.gpr[REG_RAX] = -15LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags |= RFLAGS_CF;
+    (uint64_t&)vcpu_expected.mem[0x00] = 0x00000000'00000000;
+    run("btr [ecx + 0x08], eax", vcpu_original, vcpu_expected);
+    vcpu_original.gpr[REG_RAX] = +64LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags &= ~RFLAGS_CF;
+    run("btr [rcx + 0x08], rax", vcpu_original, vcpu_expected);
+}
+
+TEST_F(EmulatorTest, insn_bts) {
+    test_bt<16>("bts", {
+        { 0xFFFE, 0x00, RFLAGS_CF,
+          0xFFFF, 0 },
+        { 0x0200, 0x09, 0,
+          0x0200, RFLAGS_CF },
+        });
+    test_bt<32>("bts", {
+        { 0xFF7FFFFF, 0x17, 0,
+          0xFFFFFFFF, 0 },
+        { 0xFFFF0000, 0x3F, RFLAGS_CF,
+          0xFFFF0000, RFLAGS_CF },
+        });
+    test_bt<64>("bts", {
+        { 0x00000000'FFFFFFFFULL, 0x20, RFLAGS_CF,
+          0x00000001'FFFFFFFFULL, 0 },
+        { 0x80000000'00000000ULL, 0xFF, 0,
+          0x80000000'00000000ULL, RFLAGS_CF },
+        });
+
+    // Variant `bts mN,rN`: Modifies the EA based on the bit offset.
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RCX] = 0ULL;
+    (uint64_t&)vcpu_original.mem[0x00] = 0x00020000'00000000;
+    (uint64_t&)vcpu_original.mem[0x08] = 0x00000000'00000000;
+    (uint64_t&)vcpu_original.mem[0x10] = 0xFFFFFFFF'FFFFFFFE;
+
+    vcpu_original.gpr[REG_RAX] = -15LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags |= RFLAGS_CF;
+    run("bts [ecx + 0x08], eax", vcpu_original, vcpu_expected);
+    vcpu_original.gpr[REG_RAX] = +64LL;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.flags &= ~RFLAGS_CF;
+    (uint64_t&)vcpu_expected.mem[0x10] = 0xFFFFFFFF'FFFFFFFF;
+    run("bts [rcx + 0x08], rax", vcpu_original, vcpu_expected);
+}
+
+TEST_F(EmulatorTest, insn_cmps) {
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+
+    // Test: cmpsw, without-rep, with-df
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RSI] = 0x10;
+    vcpu_original.gpr[REG_RDI] = 0x50;
+    vcpu_original.flags = RFLAGS_DF;
+    (uint16_t&)vcpu_original.mem[0x10] = 0x1234;
+    (uint16_t&)vcpu_original.mem[0x50] = 0x1234;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.gpr[REG_RSI] -= 2;
+    vcpu_expected.gpr[REG_RDI] -= 2;
+    vcpu_expected.flags = RFLAGS_DF | RFLAGS_ZF | RFLAGS_PF;
+    run("cmpsw", vcpu_original, vcpu_expected);
+
+    // Test: cmpsw, with-rep, without-df
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RSI] = 0x20;
+    vcpu_original.gpr[REG_RDI] = 0x80;
+    vcpu_original.gpr[REG_RCX] = 0x3;
+    vcpu_original.mem[0x20] = 0x11;
+    vcpu_original.mem[0x21] = 0x22;
+    vcpu_original.mem[0x80] = 0x11;
+    vcpu_original.mem[0x81] = 0x33;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.gpr[REG_RSI] += 0x2;
+    vcpu_expected.gpr[REG_RDI] += 0x2;
+    vcpu_expected.gpr[REG_RCX] = 0x1;
+    vcpu_expected.flags = RFLAGS_PF;
+    run("repe cmpsb", vcpu_original, vcpu_expected);
+}
+
+TEST_F(EmulatorTest, insn_mov) {
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+
+    // Test: mov r8, r/m8
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RDX] = 0x88;
+    vcpu_original.mem[0x88] = 0x44;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.gpr[REG_RCX] = 0x4400;
+    run("mov ch, [rdx]", vcpu_original, vcpu_expected);
 }
 
 TEST_F(EmulatorTest, insn_movs) {
@@ -688,6 +969,55 @@ TEST_F(EmulatorTest, insn_or) {
     });
 }
 
+TEST_F(EmulatorTest, insn_pop) {
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+
+    // Test: pop, prot32, 16-bit, to-mem
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RAX] = 0x20;
+    vcpu_original.gpr[REG_RSP] = 0x40;
+    (uint16_t&)vcpu_original.mem[0x40] = 0x1234;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.gpr[REG_RSP] += 2;
+    (uint16_t&)vcpu_expected.mem[0x20] = 0x1234;
+    run_prot32("pop word ptr [eax]", vcpu_original, vcpu_expected);
+
+    // Test: pop, prot16, 16-bit, to-reg
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RSP] = 0x80;
+    (uint16_t&)vcpu_original.mem[0x80] = 0x1234;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.gpr[REG_RAX] = 0x1234;
+    vcpu_expected.gpr[REG_RSP] += 2;
+    run_prot16("pop ax", vcpu_original, vcpu_expected);
+}
+
+TEST_F(EmulatorTest, insn_push) {
+    test_cpu_t vcpu_original;
+    test_cpu_t vcpu_expected;
+
+    // Test: push, prot64, 16-bit, from-mem
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RAX] = 0x20;
+    vcpu_original.gpr[REG_RSP] = 0x42;
+    (uint16_t&)vcpu_original.mem[0x20] = 0x1234;
+    (uint16_t&)vcpu_original.mem[0x22] = 0x4578;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.gpr[REG_RSP] -= 2;
+    (uint16_t&)vcpu_expected.mem[0x40] = 0x1234;
+    run_prot64("push word ptr [rax]", vcpu_original, vcpu_expected);
+
+    // Test: push, prot32, 32-bit, from-reg
+    vcpu_original = {};
+    vcpu_original.gpr[REG_RAX] = 0x1122334455667788ULL;
+    vcpu_original.gpr[REG_RSP] = 0x80;
+    vcpu_expected = vcpu_original;
+    vcpu_expected.gpr[REG_RSP] -= 4;
+    (uint32_t&)vcpu_expected.mem[0x7C] = 0x55667788;
+    run_prot32("push eax", vcpu_original, vcpu_expected);
+}
+
 TEST_F(EmulatorTest, insn_stos) {
     test_cpu_t vcpu_original;
     test_cpu_t vcpu_expected;
@@ -701,6 +1031,29 @@ TEST_F(EmulatorTest, insn_stos) {
     vcpu_expected.gpr[REG_RDI] -= 1;
     vcpu_expected.mem[0x20] = 0x77;
     run("stosb", vcpu_original, vcpu_expected);
+}
+
+TEST_F(EmulatorTest, insn_test) {
+    test_test<8>({
+        { 0x55, 0xF0, RFLAGS_CF,
+          0x55, RFLAGS_PF },
+        { 0xF0, 0x0F, RFLAGS_OF,
+          0xF0, RFLAGS_PF | RFLAGS_ZF },
+        });
+    test_test<16>({
+        { 0x0001, 0xF00F, RFLAGS_CF | RFLAGS_OF,
+          0x0001, 0 },
+        { 0xFF00, 0xF0F0, 0,
+          0xFF00, RFLAGS_PF | RFLAGS_SF },
+        });
+    test_test<32>({
+        { 0xFFFF0001, 0xFFFF0001, 0,
+          0xFFFF0001, RFLAGS_SF },
+        });
+    test_test<64>({
+        { 0x0000FFFF'F0F0FFFFULL, 0xFFFF0000'0F0F0000ULL, 0,
+          0x0000FFFF'F0F0FFFFULL, RFLAGS_PF | RFLAGS_ZF },
+        });
 }
 
 TEST_F(EmulatorTest, insn_xor) {

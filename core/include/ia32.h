@@ -72,22 +72,25 @@ void ASMCALL set_kernel_fs(uint16_t val);
 
 void ASMCALL asm_btr(uint8_t *addr, uint bit);
 void ASMCALL asm_bts(uint8_t *addr, uint bit);
+void ASMCALL asm_clts(void);
 void ASMCALL asm_fxinit(void);
 void ASMCALL asm_fxsave(mword *addr);
 void ASMCALL asm_fxrstor(mword *addr);
 void ASMCALL asm_cpuid(union cpuid_args_t *state);
 
 void ASMCALL __nmi(void);
-uint32_t ASMCALL __fls(uint32_t bit32);
+uint32_t ASMCALL asm_fls(uint32_t bit32);
 
 uint64_t ia32_rdmsr(uint32_t reg);
 void ia32_wrmsr(uint32_t reg, uint64_t val);
 
-uint64_t rdtsc(void);
+uint64_t ia32_rdtsc(void);
 
-void fxinit(void);
-void fxsave(mword *addr);
-void fxrstor(mword *addr);
+void hax_clts(void);
+
+void hax_fxinit(void);
+void hax_fxsave(mword *addr);
+void hax_fxrstor(mword *addr);
 
 void btr(uint8_t *addr, uint bit);
 void bts(uint8_t *addr, uint bit);

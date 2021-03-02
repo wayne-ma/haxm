@@ -65,8 +65,8 @@ typedef enum mmu_mode {
 typedef uint32_t pagemode_t;
 
 typedef struct vtlb {
-    vaddr_t va;
-    paddr_t ha;
+    hax_vaddr_t va;
+    hax_paddr_t ha;
     uint64_t flags;
     uint guest_order;
     uint order;
@@ -84,7 +84,7 @@ typedef struct hax_mmu {
     struct hax_page *hpd_page;
     struct hax_page *pde_page;
     struct hax_page *pde_shadow_page;
-    paddr_t pdir;
+    hax_paddr_t pdir;
     struct hax_link_list free_page_list;
     struct hax_link_list used_page_list;
     struct hax_link_list igo_page_list;
@@ -95,23 +95,22 @@ typedef struct hax_mmu {
 uint64_t vtlb_get_cr3(struct vcpu_t *vcpu);
 
 void vcpu_invalidate_tlb(struct vcpu_t *vcpu, bool global);
-void vcpu_invalidate_tlb_addr(struct vcpu_t *vcpu, vaddr_t va);
+void vcpu_invalidate_tlb_addr(struct vcpu_t *vcpu, hax_vaddr_t va);
 
 uint vcpu_vtlb_alloc(struct vcpu_t *vcpu);
 void vcpu_vtlb_free(struct vcpu_t *vcpu);
 
 bool handle_vtlb(struct vcpu_t *vcpu);
 
-uint vcpu_translate(struct vcpu_t *vcpu, vaddr_t va, uint access, paddr_t *pa,
+uint vcpu_translate(struct vcpu_t *vcpu, hax_vaddr_t va, uint access, hax_paddr_t *pa,
                     uint64_t *len, bool update);
 
-uint32_t vcpu_read_guest_virtual(struct vcpu_t *vcpu, vaddr_t addr, void *dst,
+uint32_t vcpu_read_guest_virtual(struct vcpu_t *vcpu, hax_vaddr_t addr, void *dst,
                                uint32_t dst_buflen, uint32_t size, uint flag);
-uint32_t vcpu_write_guest_virtual(struct vcpu_t *vcpu, vaddr_t addr,
+uint32_t vcpu_write_guest_virtual(struct vcpu_t *vcpu, hax_vaddr_t addr,
                                 uint32_t dst_buflen, const void *src, uint32_t size,
                                 uint flag);
 
-#ifdef CONFIG_HAX_EPT2
 /*
  * Reads the given number of bytes from guest RAM (using a GVA) into the given
  * buffer. This function is supposed to be called by the MMIO handler to obtain
@@ -128,7 +127,6 @@ uint32_t vcpu_write_guest_virtual(struct vcpu_t *vcpu, vaddr_t addr,
  */
 int mmio_fetch_instruction(struct vcpu_t *vcpu, uint64_t gva, uint8_t *buf,
                            int len);
-#endif  // CONFIG_HAX_EPT2
 
 void hax_inject_page_fault(struct vcpu_t *vcpu, mword error_code);
 

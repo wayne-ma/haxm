@@ -44,9 +44,13 @@
 struct vcpu_t;
 struct vcpu_state_t;
 
-typedef uint32_t cpuid_t;  // CPU identifier
-
 #define NR_HMSR 6
+// The number of MSRs to be loaded on VM exits
+// Currently the MSRs list only supports automatic loading of below MSRs, the
+// total count of which is 8.
+// * IA32_PMCx
+// * IA32_PERFEVTSELx
+#define NR_HMSR_AUTOLOAD 8
 
 struct hstate {
     /* ldt is not covered by host vmcs area */
@@ -67,6 +71,7 @@ struct hstate {
     uint64_t fs_base;
     uint64_t hcr2;
     struct vmx_msr hmsr[NR_HMSR];
+    vmx_msr_entry hmsr_autoload[NR_HMSR_AUTOLOAD];
     // IA32_PMCx, since APM v1
     uint64_t apm_pmc_msrs[APM_MAX_GENERAL_COUNT];
     // IA32_PERFEVTSELx, since APM v1
@@ -84,6 +89,9 @@ struct hstate {
     uint64_t dr3;
     uint64_t dr6;
     uint64_t dr7;
+    // CR0
+    bool cr0_ts;
+    uint64_t _pat;
 };
 
 struct hstate_compare {
@@ -100,20 +108,20 @@ struct per_cpu_data {
     struct hax_page    *vmxon_page;
     struct hax_page    *vmcs_page;
     struct vcpu_t      *current_vcpu;
-    paddr_t            other_vmcs;
-    cpuid_t            cpu_id;
+    hax_paddr_t        other_vmcs;
+    uint32_t           cpu_id;
     uint16_t           vmm_flag;
     uint16_t           nested;
     mword              host_cr4_vmxe;
 
     /*
      * These fields are used to record the result of certain VMX instructions
-     * when they are used in a function wrapped by smp_call_function(). This is
+     * when they are used in a function wrapped by hax_smp_call_function(). This is
      * because it is not safe to call hax_error(), etc. (whose underlying
      * implementation may use a lock) from the wrapped function to log a
      * failure; doing so may cause a deadlock and thus a host reboot, especially
      * on macOS, where mp_rendezvous_no_intrs() (the legacy Darwin API used by
-     * HAXM to implement smp_call_function()) is known to be prone to deadlocks:
+     * HAXM to implement hax_smp_call_function()) is known to be prone to deadlocks:
      * https://lists.apple.com/archives/darwin-kernel/2006/Dec/msg00006.html
      */
     vmx_result_t    vmxon_res;
@@ -155,8 +163,7 @@ struct per_cpu_data {
 extern struct per_cpu_data ** hax_cpu_data;
 static struct per_cpu_data * current_cpu_data(void)
 {
-    uint32_t cpu_id = hax_cpuid();
-    return hax_cpu_data[cpu_id];
+    return hax_cpu_data[hax_cpu_id()];
 }
 
 static struct per_cpu_data * get_cpu_data(uint32_t cpu_id)

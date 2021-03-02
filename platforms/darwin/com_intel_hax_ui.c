@@ -32,10 +32,14 @@
 
 #include <libkern/version.h>
 #include <sys/proc.h>
+#include <sys/ttycom.h>
 
 /* Major version number of Darwin/XNU kernel */
 extern const int version_major;
 static int hax_vcpu_major = 0;
+
+/* MAXCOMLEN + 1 == 17 (see bsd/sys/param.h) */
+#define TASK_NAME_LEN 17
 
 /*
  * A tricky point of the vcpu/vm reference count:
@@ -75,6 +79,42 @@ static int hax_vcpu_major = 0;
 #define HAX_VM_DEVFS_FMT_COMPAT   "hax_vm*/vm%02d"
 #define HAX_VM_DEVFS_FMT          "hax_vm/vm%02d"
 
+#define load_user_data(dest, src, body_len, body_max, arg_t, body_t)          \
+        user_addr_t uaddr = (user_addr_t)(*(arg_t **)(src));                  \
+        size_t size;                                                          \
+        arg_t header;                                                         \
+        (dest) = NULL;                                                        \
+        if (copyin(uaddr, &header, sizeof(arg_t))) {                          \
+            hax_log(HAX_LOGE, "%s: argument header read error.\n", __func__); \
+            ret = -EFAULT;                                                    \
+            break;                                                            \
+        }                                                                     \
+        if (header.body_len > (body_max)) {                                   \
+            hax_log(HAX_LOGW, "%s: %d exceeds argument body maximum %d.\n",   \
+                    __func__, header.body_len, (body_max));                   \
+            ret = -E2BIG;                                                     \
+            break;                                                            \
+        }                                                                     \
+        size = sizeof(arg_t) + header.body_len * sizeof(body_t);              \
+        (dest) = hax_vmalloc(size, HAX_MEM_NONPAGE);                          \
+        if ((dest) == NULL) {                                                 \
+            hax_log(HAX_LOGE, "%s: failed to allocate memory.\n", __func__);  \
+            ret = -ENOMEM;                                                    \
+            break;                                                            \
+        }                                                                     \
+        if (copyin(uaddr, (dest), size)) {                                    \
+            hax_log(HAX_LOGE, "%s: argument read error.\n", __func__);        \
+            unload_user_data(dest);                                           \
+            ret = -EFAULT;                                                    \
+            break;                                                            \
+        }
+
+#define unload_user_data(dest)       \
+        if ((dest) != NULL)          \
+            hax_vfree((dest), size);
+
+static void handle_unknown_ioctl(dev_t dev, ulong cmd, struct proc *p);
+
 static struct vcpu_t * get_vcpu_by_dev(dev_t dev) {
     int vm_id = minor2vcpuvmmid(dev);
     int vcpu_id = minor2vcpuid(dev);
@@ -88,14 +128,14 @@ static int hax_vcpu_open(dev_t dev, int flags, __unused int devtype,
     struct vcpu_t *cvcpu;
     int ret;
 
-    hax_log_level(HAX_LOGD, "HAX vcpu open called\n");
+    hax_log(HAX_LOGD, "HAX vcpu open called\n");
     cvcpu = get_vcpu_by_dev(dev);
     if (!cvcpu)
         return -ENODEV;
 
     ret = hax_vcpu_core_open(cvcpu);
     if (ret)
-        hax_error("Failed to open core vcpu\n");
+        hax_log(HAX_LOGE, "Failed to open core vcpu\n");
     hax_put_vcpu(cvcpu);
     return ret;
 }
@@ -105,12 +145,12 @@ static int hax_vcpu_close(dev_t dev, int flags, __unused int devtype,
 {
     int ret = 0;
     struct vcpu_t *cvcpu;
-    hax_log_level(HAX_LOGD, "HAX vcpu close called\n");
+    hax_log(HAX_LOGD, "HAX vcpu close called\n");
 
     cvcpu = get_vcpu_by_dev(dev);
 
     if (!cvcpu) {
-        hax_error("Failed to find the vcpu, is it closed already? \n");
+        hax_log(HAX_LOGE, "Failed to find the vcpu, is it closed already? \n");
         return 0;
     }
 
@@ -162,15 +202,16 @@ static int hax_vcpu_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
             msr = msrs->entries;
             /* nr_msr needs to be verified */
             if (msrs->nr_msr >= 0x20) {
-                hax_error("MSRS invalid!\n");
-                return -EFAULT;
+                hax_log(HAX_LOGE, "MSRS invalid!\n");
+                ret = -EFAULT;
+                break;
             }
             for (i = 0; i < msrs->nr_msr; i++, msr++) {
                 fail = vcpu_set_msr(mvcpu2cvcpu(vcpu), msr->entry, msr->value);
                 if (fail) {
-                    // hax_log_level(HAX_LOGE,
-                    //               "Failed to set msr %x index %x\n",
-                    //               msr->entry, i);
+                    // hax_log(HAX_LOGE,
+                    //         "Failed to set msr %x index %x\n",
+                    //         msr->entry, i);
                     break;
                 }
             }
@@ -185,8 +226,9 @@ static int hax_vcpu_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
             msrs = (struct hax_msr_data *)data;
             msr = msrs->entries;
             if(msrs->nr_msr >= 0x20) {
-                hax_error("MSRS invalid!\n");
-                return -EFAULT;
+                hax_log(HAX_LOGE, "MSRS invalid!\n");
+                ret = -EFAULT;
+                break;
             }
 
             for (i = 0; i < msrs->nr_msr; i++, msr++) {
@@ -235,16 +277,16 @@ static int hax_vcpu_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
             vcpu_debug(cvcpu, hax_debug);
             break;
         }
+        case HAX_VCPU_IOCTL_SET_CPUID: {
+            struct hax_cpuid *cpuid;
+            load_user_data(cpuid, data, total, HAX_MAX_CPUID_ENTRIES, hax_cpuid,
+                           hax_cpuid_entry);
+            ret = vcpu_set_cpuid(cvcpu, cpuid);
+            unload_user_data(cpuid);
+            break;
+        }
         default: {
-            int pid;
-            char task_name[17];
-
-            pid = proc_pid(p);
-            proc_name(pid, task_name, sizeof(task_name));
-            hax_error("Unknown vcpu ioctl 0x%lx, pid=%d ('%s')\n", cmd, pid,
-                      task_name);
-            //printf("set regs ioctl %lx get regs %lx", HAX_VCPU_SET_REGS,
-            //       HAX_VCPU_GET_REGS);
+            handle_unknown_ioctl(dev, cmd, p);
             ret = -ENOSYS;
             break;
         }
@@ -261,7 +303,7 @@ static struct cdevsw hax_vcpu_devsw = {
 
 static int hax_get_vcpu_mid(struct hax_vcpu_mac *vcpu)
 {
-    assert(vcpu->vcpu_id < 0xfff);
+    hax_assert(vcpu->vcpu_id < 0xfff);
     return (((vcpu->vm_id + 1) << 12) | vcpu->vcpu_id);
 }
 
@@ -288,7 +330,7 @@ int hax_vcpu_create_ui(struct hax_vcpu_mac *vcpu)
 
     minor_id = hax_get_vcpu_mid(vcpu);
     if (minor_id < 0) {
-        hax_error("No vcpu minor id left\n");
+        hax_log(HAX_LOGE, "No vcpu minor id left\n");
         return 0;
     }
 
@@ -304,12 +346,12 @@ int hax_vcpu_create_ui(struct hax_vcpu_mac *vcpu)
     pnode = devfs_make_node(makedev(hax_vcpu_major, minor_id), DEVFS_CHAR,
                             vcpu->owner, vcpu->gowner, 0600, devfs_pathname);
     if (NULL == pnode) {
-        hax_error("Failed to init the device, %s\n", devfs_pathname);
+        hax_log(HAX_LOGE, "Failed to init the device, %s\n", devfs_pathname);
         hax_put_vcpu_mid(vcpu);
         return -1;
     }
-    hax_info("%s: Created devfs node /dev/%s for vCPU #%d\n", __func__,
-             devfs_pathname, vcpu->vcpu_id);
+    hax_log(HAX_LOGI, "%s: Created devfs node /dev/%s for vCPU #%d\n",
+            __func__, devfs_pathname, vcpu->vcpu_id);
     vcpu->pnode = pnode;
 
     return 0;
@@ -327,7 +369,7 @@ static int hax_vm_open(dev_t dev, int flags, __unused int devtype,
         return -ENODEV;
     ret = hax_vm_core_open(cvm);
     hax_put_vm(cvm);
-    hax_log_level(HAX_LOGI, "Open VM\n");
+    hax_log(HAX_LOGI, "Open VM\n");
     return ret;
 }
 
@@ -337,7 +379,7 @@ static int hax_vm_close(dev_t dev, int flags, __unused int devtype,
     struct vm_t *cvm;
 
     cvm = hax_get_vm(minor(dev), 1);
-    hax_log_level(HAX_LOGI, "Close VM\n");
+    hax_log(HAX_LOGI, "Close VM\n");
     if (cvm) {
         /* put the ref get just now */
         hax_put_vm(cvm);
@@ -373,8 +415,8 @@ static int hax_vm_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
             vm_id = vm_mac->vm_id;
             cvcpu = vcpu_create(cvm, vm_mac, vcpu_id);
             if (!cvcpu) {
-                hax_error("Failed to create vcpu %x on vm %x\n", vcpu_id,
-                          vm_id);
+                hax_log(HAX_LOGE, "Failed to create vcpu %x on vm %x\n",
+                        vcpu_id, vm_id);
                 ret = -EINVAL;
                 hax_put_vm(cvm);
                 return ret;
@@ -384,9 +426,9 @@ static int hax_vm_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
         case HAX_VM_IOCTL_ALLOC_RAM: {
             struct hax_alloc_ram_info *info;
             info = (struct hax_alloc_ram_info *)data;
-            hax_info("IOCTL_ALLOC_RAM: vm_id=%d, va=0x%llx, size=0x%x,"
-                     " pad=0x%x\n", vm_mac->vm_id, info->va, info->size,
-                     info->pad);
+            hax_log(HAX_LOGI, "IOCTL_ALLOC_RAM: vm_id=%d, va=0x%llx, size=0x%x,"
+                    " pad=0x%x\n", vm_mac->vm_id, info->va, info->size,
+                    info->pad);
             ret = hax_vm_add_ramblock(cvm, info->va, info->size);
             break;
         }
@@ -394,13 +436,14 @@ static int hax_vm_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
             struct hax_ramblock_info *info;
             info = (struct hax_ramblock_info *)data;
             if (info->reserved) {
-                hax_error("IOCTL_ADD_RAMBLOCK: vm_id=%d, reserved=0x%llx\n",
-                          vm_mac->vm_id, info->reserved);
-                return -EINVAL;
+                hax_log(HAX_LOGE, "IOCTL_ADD_RAMBLOCK: vm_id=%d, "
+                        "reserved=0x%llx\n", vm_mac->vm_id, info->reserved);
+                ret = -EINVAL;
+                break;
             }
-            hax_info("IOCTL_ADD_RAMBLOCK: vm_id=%d, start_va=0x%llx,"
-                     " size=0x%llx\n", vm_mac->vm_id, info->start_va,
-                     info->size);
+            hax_log(HAX_LOGI, "IOCTL_ADD_RAMBLOCK: vm_id=%d, start_va=0x%llx,"
+                    " size=0x%llx\n", vm_mac->vm_id, info->start_va,
+                    info->size);
             ret = hax_vm_add_ramblock(cvm, info->start_va, info->size);
             break;
         }
@@ -410,15 +453,15 @@ static int hax_vm_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
             ret = hax_vm_set_ram(cvm, info);
             break;
         }
-#ifdef CONFIG_HAX_EPT2
         case HAX_VM_IOCTL_SET_RAM2: {
             struct hax_set_ram_info2 *info;
             info = (struct hax_set_ram_info2 *)data;
             if (info->reserved1 || info->reserved2) {
-                hax_error("IOCTL_SET_RAM2: vm_id=%d, reserved1=0x%x"
-                          " reserved2=0x%llx\n",
-                          vm_mac->vm_id, info->reserved1, info->reserved2);
-                return -EINVAL;
+                hax_log(HAX_LOGE, "IOCTL_SET_RAM2: vm_id=%d, reserved1=0x%x"
+                        " reserved2=0x%llx\n",
+                        vm_mac->vm_id, info->reserved1, info->reserved2);
+                ret = -EINVAL;
+                break;
             }
             ret = hax_vm_set_ram2(cvm, info);
             break;
@@ -427,43 +470,36 @@ static int hax_vm_ioctl(dev_t dev, ulong cmd, caddr_t data, int flag,
             struct hax_protect_ram_info *info;
             info = (struct hax_protect_ram_info *)data;
             if (info->reserved) {
-                hax_error("IOCTL_PROTECT_RAM: vm_id=%d, reserved=0x%x\n",
-                          vm_mac->vm_id, info->reserved);
-                return -EINVAL;
+                hax_log(HAX_LOGE, "IOCTL_PROTECT_RAM: vm_id=%d, "
+                        "reserved=0x%x\n", vm_mac->vm_id, info->reserved);
+                ret = -EINVAL;
+                break;
             }
             ret = hax_vm_protect_ram(cvm, info);
             break;
         }
-#endif
         case HAX_VM_IOCTL_NOTIFY_QEMU_VERSION: {
             int pid;
-            /* MAXCOMLEN + 1 == 17 (see bsd/sys/param.h) */
-            char task_name[17];
+            char task_name[TASK_NAME_LEN];
             struct hax_qemu_version *info;
 
             pid = proc_pid(p);
             proc_name(pid, task_name, sizeof(task_name));
             /*
-             * This message is informational, but hax_warning() makes sure it is
+             * This message is informational, but HAX_LOGW makes sure it is
              * printed by default, which helps us identify QEMU PIDs, in case
              * we ever receive unknown ioctl()s from other processes.
              */
-            hax_warning("%s: Got HAX_VM_IOCTL_NOTIFY_QEMU_VERSION, pid=%d"
-                        " ('%s')\n", __func__, pid, task_name);
+            hax_log(HAX_LOGW, "%s: Got HAX_VM_IOCTL_NOTIFY_QEMU_VERSION, "
+                    "pid=%d ('%s')\n", __func__, pid, task_name);
             info = (struct hax_qemu_version *)data;
 
             ret = hax_vm_set_qemuversion(cvm, info);
             break;
         }
         default: {
-            int pid;
-            char task_name[17];
-
+            handle_unknown_ioctl(dev, cmd, p);
             ret = -ENOSYS;
-            pid = proc_pid(p);
-            proc_name(pid, task_name, sizeof(task_name));
-            hax_error("Unknown VM IOCTL 0x%lx, pid=%d ('%s')\n", cmd, pid,
-                      task_name);
             break;
         }
     }
@@ -504,12 +540,12 @@ int hax_vm_create_ui(struct hax_vm_mac *vm)
     pnode = devfs_make_node(makedev(hax_vm_major, vm->vm_id), DEVFS_CHAR,
                             vm->owner, vm->gowner, 0600, devfs_pathname);
     if (NULL == pnode) {
-        hax_error("Failed to init the device %s\n", devfs_pathname);
+        hax_log(HAX_LOGE, "Failed to init the device %s\n", devfs_pathname);
         cdevsw_remove(hax_vm_major, &hax_vm_devsw);
         return -1;
     }
-    hax_info("%s: Created devfs node /dev/%s for VM #%d\n", __func__,
-             devfs_pathname, vm->vm_id);
+    hax_log(HAX_LOGI, "%s: Created devfs node /dev/%s for VM #%d\n", __func__,
+            devfs_pathname, vm->vm_id);
     vm->pnode = pnode;
     return 0;
 }
@@ -552,7 +588,7 @@ static int hax_ioctl(dev_t dev, u_long cmd, caddr_t data, int flag,
 
             cvm = hax_create_vm(&vm_id);
             if (!cvm) {
-                hax_log_level(HAX_LOGE, "Failed to create the HAX VM\n");
+                hax_log(HAX_LOGE, "Failed to create the HAX VM\n");
                 ret = -ENOMEM;
                 break;
             }
@@ -562,32 +598,25 @@ static int hax_ioctl(dev_t dev, u_long cmd, caddr_t data, int flag,
         }
 
         default: {
-            int pid;
-            char task_name[17];
-
+            handle_unknown_ioctl(dev, cmd, p);
             ret = -ENOSYS;
-            pid = proc_pid(p);
-            proc_name(pid, task_name, sizeof(task_name));
-            hax_error("Unknown ioctl 0x%lx, pid=%d ('%s')\n", cmd, pid,
-                      task_name);
             break;
         }
     }
     return ret;
 }
 
-
 static int hax_open(dev_t dev, int flags, __unused int devtype,
                     __unused struct proc *p)
 {
-    hax_log_level(HAX_LOGI, "HAX module opened\n");
+    hax_log(HAX_LOGI, "HAX module opened\n");
     return 0;
 }
 
 static int hax_close(__unused dev_t dev, __unused int flags,
                      __unused int devtype, __unused struct proc *p)
 {
-    hax_log_level(HAX_LOGI, "hax_close\n");
+    hax_log(HAX_LOGI, "hax_close\n");
     return (0);
 }
 
@@ -601,11 +630,11 @@ static void *pnode = NULL;
 
 int com_intel_hax_init_ui(void)
 {
-    hax_info("%s: XNU version_major=%d\n", __func__, version_major);
+    hax_log(HAX_LOGI, "%s: XNU version_major=%d\n", __func__, version_major);
 
     hax_major = cdevsw_add(-1, &hax_devsw);
     if (hax_major < 0) {
-        hax_log_level(HAX_LOGE, "Failed to alloc major number\n");
+        hax_log(HAX_LOGE, "Failed to alloc major number\n");
         return -1;
     }
 
@@ -613,14 +642,14 @@ int com_intel_hax_init_ui(void)
                             "HAX", 0);
 
     if (NULL == pnode) {
-        hax_error("Failed to init the device\n");
+        hax_log(HAX_LOGE, "Failed to init the device\n");
         goto error;
     }
 
     if (hax_vm_major <= 0) {
         hax_vm_major = cdevsw_add(-1, &hax_vm_devsw);
         if (hax_vm_major < 0) {
-            hax_log_level(HAX_LOGE, "Failed to allocate VM major number\n");
+            hax_log(HAX_LOGE, "Failed to allocate VM major number\n");
             goto error;
         }
     }
@@ -628,7 +657,7 @@ int com_intel_hax_init_ui(void)
     if (hax_vcpu_major <= 0) {
         hax_vcpu_major = cdevsw_add(-1, &hax_vcpu_devsw);
         if (hax_vcpu_major < 0) {
-            hax_log_level(HAX_LOGE, "Failed to allocate VCPU major number\n");
+            hax_log(HAX_LOGE, "Failed to allocate VCPU major number\n");
             goto error;
         }
     }
@@ -656,7 +685,7 @@ error:
 
 int com_intel_hax_exit_ui(void)
 {
-    hax_log_level(HAX_LOGI, "Exit hax module\n");
+    hax_log(HAX_LOGI, "Exit hax module\n");
 
     if (hax_vcpu_major) {
         cdevsw_remove(hax_vcpu_major, &hax_vcpu_devsw);
@@ -679,4 +708,37 @@ int com_intel_hax_exit_ui(void)
     }
 
     return 0;
+}
+
+static void handle_unknown_ioctl(dev_t dev, ulong cmd, struct proc *p)
+{
+    int dev_major = major(dev);
+    const char *dev_name = NULL;
+    int pid;
+    char task_name[TASK_NAME_LEN];
+
+    if (cmd == TIOCSCTTY) {
+        /* Because HAXM cdevsw's are created with d_type == D_TTY, the Darwin
+         * kernel may send us an TIOCSCTTY ioctl while servicing an open()
+         * syscall on these devices (see open1() in bsd/vfs/vfs_syscall.c).
+         * Suppress the bogus warning for this ioctl to avoid confusion.
+         */
+        return;
+    }
+
+    if (dev_major == hax_major) {
+        dev_name = "HAX";
+    } else if (dev_major == hax_vm_major) {
+        dev_name = "VM";
+    } else if (dev_major == hax_vcpu_major) {
+        dev_name = "VCPU";
+    } else {
+        dev_name = "??";
+        hax_log(HAX_LOGE, "%s: Unknown device major %d\n", __func__, dev_major);
+    }
+
+    pid = proc_pid(p);
+    proc_name(pid, task_name, sizeof(task_name));
+    hax_log(HAX_LOGW, "Unknown %s ioctl 0x%lx from pid=%d ('%s')\n", dev_name,
+            cmd, pid, task_name);
 }

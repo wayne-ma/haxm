@@ -145,16 +145,16 @@ static void pw_retrieve_indices(IN uint64_t virtual_address, IN bool is_pae,
             *pdpte_index = (virtual_address_low_32_bit &
                             PW_PDPTE_INDEX_MASK_IN_32_BIT_ADDR)
                            >> PW_PDPTE_INDEX_SHIFT;
-            assert(*pdpte_index < PW_NUM_OF_PDPT_ENTRIES_IN_32_BIT_MODE);
+            hax_assert(*pdpte_index < PW_NUM_OF_PDPT_ENTRIES_IN_32_BIT_MODE);
         }
         *pde_index = (virtual_address_low_32_bit &
                       PW_PDE_INDEX_MASK_IN_PAE_MODE)
                      >> PW_PDE_INDEX_SHIFT_IN_PAE_MODE;
-        assert(*pde_index < PW_NUM_OF_TABLE_ENTRIES_IN_PAE_MODE);
+        hax_assert(*pde_index < PW_NUM_OF_TABLE_ENTRIES_IN_PAE_MODE);
         *pte_index = (virtual_address_low_32_bit &
                       PW_PTE_INDEX_MASK_IN_PAE_MODE)
                      >> PW_PTE_INDEX_SHIFT;
-        assert(*pte_index < PW_NUM_OF_TABLE_ENTRIES_IN_PAE_MODE);
+        hax_assert(*pte_index < PW_NUM_OF_TABLE_ENTRIES_IN_PAE_MODE);
     } else {
         *pml4te_index = PW_INVALID_INDEX;
         *pdpte_index = PW_INVALID_INDEX;
@@ -314,10 +314,10 @@ static bool pw_is_write_access_permitted(
         return true;
 
     if (is_lme) {
-        assert(pml4te != NULL);
-        assert(pdpte != NULL);
-        assert(pml4te->pae_lme_entry.bits.present);
-        assert(pdpte->pae_lme_entry.bits.present);
+        hax_assert(pml4te != NULL);
+        hax_assert(pdpte != NULL);
+        hax_assert(pml4te->pae_lme_entry.bits.present);
+        hax_assert(pdpte->pae_lme_entry.bits.present);
         if (!pml4te->pae_lme_entry.bits.writable ||
             !pdpte->pae_lme_entry.bits.writable)
             return false;
@@ -326,8 +326,8 @@ static bool pw_is_write_access_permitted(
     if (pw_is_1gb_page_pdpte(pdpte))
         return true;
 
-    assert(pde != NULL);
-    assert(pde->non_pae_entry.bits.present);
+    hax_assert(pde != NULL);
+    hax_assert(pde->non_pae_entry.bits.present);
     // Doesn't matter which entry "non_pae" or "pae_lme" is checked
     if (!pde->non_pae_entry.bits.writable)
         return false;
@@ -335,8 +335,8 @@ static bool pw_is_write_access_permitted(
     if (pw_is_big_page_pde(pde, is_lme, is_pae, is_pse))
         return true;
 
-    assert(pte != NULL);
-    assert(pte->non_pae_entry.bits.present);
+    hax_assert(pte != NULL);
+    hax_assert(pte->non_pae_entry.bits.present);
 
     // Doesn't matter which entry "non_pae" or "pae_lme" is checked
     return pte->non_pae_entry.bits.writable;
@@ -347,10 +347,10 @@ static bool pw_is_user_access_permitted(
         PW_PAGE_ENTRY *pte, bool is_lme, bool is_pae, bool is_pse)
 {
     if (is_lme) {
-        assert(pml4te != NULL);
-        assert(pdpte != NULL);
-        assert(pml4te->pae_lme_entry.bits.present);
-        assert(pdpte->pae_lme_entry.bits.present);
+        hax_assert(pml4te != NULL);
+        hax_assert(pdpte != NULL);
+        hax_assert(pml4te->pae_lme_entry.bits.present);
+        hax_assert(pdpte->pae_lme_entry.bits.present);
         if (!pml4te->pae_lme_entry.bits.user ||
             !pdpte->pae_lme_entry.bits.user)
             return false;
@@ -359,8 +359,8 @@ static bool pw_is_user_access_permitted(
     if (pw_is_1gb_page_pdpte(pdpte))
         return true;
 
-    assert(pde != NULL);
-    assert(pde->non_pae_entry.bits.present);
+    hax_assert(pde != NULL);
+    hax_assert(pde->non_pae_entry.bits.present);
     // Doesn't matter which entry "non_pae" or "pae_lme" is checked
     if (!pde->non_pae_entry.bits.user)
         return false;
@@ -368,8 +368,8 @@ static bool pw_is_user_access_permitted(
     if (pw_is_big_page_pde(pde, is_lme, is_pae, is_pse))
         return true;
 
-    assert(pte != NULL);
-    assert(pte->non_pae_entry.bits.present);
+    hax_assert(pte != NULL);
+    hax_assert(pte->non_pae_entry.bits.present);
 
     // Doesn't matter which entry "non_pae" or "pae_lme" is checked
     return (pte->non_pae_entry.bits.user);
@@ -380,10 +380,10 @@ static bool pw_is_fetch_access_permitted(
         PW_PAGE_ENTRY *pte, bool is_lme, bool is_pae, bool is_pse)
 {
     if (is_lme) {
-        assert(pml4te != NULL);
-        assert(pdpte != NULL);
-        assert(pml4te->pae_lme_entry.bits.present);
-        assert(pdpte->pae_lme_entry.bits.present);
+        hax_assert(pml4te != NULL);
+        hax_assert(pdpte != NULL);
+        hax_assert(pml4te->pae_lme_entry.bits.present);
+        hax_assert(pdpte->pae_lme_entry.bits.present);
 
         if (pml4te->pae_lme_entry.bits.exb_or_res ||
             pdpte->pae_lme_entry.bits.exb_or_res)
@@ -393,23 +393,23 @@ static bool pw_is_fetch_access_permitted(
     if (pw_is_1gb_page_pdpte(pdpte))
         return true;
 
-    assert(pde != NULL);
-    assert(pde->pae_lme_entry.bits.present);
+    hax_assert(pde != NULL);
+    hax_assert(pde->pae_lme_entry.bits.present);
     if (pde->pae_lme_entry.bits.exb_or_res)
         return false;
 
     if (pw_is_big_page_pde(pde, is_lme, is_pae, is_pse))
         return true;
 
-    assert(pte != NULL);
-    assert(pte->pae_lme_entry.bits.present);
+    hax_assert(pte != NULL);
+    hax_assert(pte->pae_lme_entry.bits.present);
 
     return !pte->pae_lme_entry.bits.exb_or_res;
 }
 
 static uint64_t pw_retrieve_phys_addr(PW_PAGE_ENTRY *entry, bool is_pae)
 {
-    assert(entry->non_pae_entry.bits.present);
+    hax_assert(entry->non_pae_entry.bits.present);
     if (is_pae) {
         uint32_t addr_low = entry->pae_lme_entry.bits.addr_base_low
                           << PW_TABLE_SHIFT;
@@ -460,9 +460,9 @@ static void pw_update_ad_bits_in_entry(PW_PAGE_ENTRY *native_entry,
                                        PW_PAGE_ENTRY *old_native_value,
                                        PW_PAGE_ENTRY *new_native_value)
 {
-    assert(native_entry != NULL);
-    assert(old_native_value->non_pae_entry.bits.present);
-    assert(new_native_value->non_pae_entry.bits.present);
+    hax_assert(native_entry != NULL);
+    hax_assert(old_native_value->non_pae_entry.bits.present);
+    hax_assert(new_native_value->non_pae_entry.bits.present);
 
     if (old_native_value->non_pae_entry.val !=
         new_native_value->non_pae_entry.val) {
@@ -492,10 +492,10 @@ static void pw_update_ad_bits(
         PW_PAGE_ENTRY pml4te_before_update;
         PW_PAGE_ENTRY pdpte_before_update;
 
-        assert(guest_space_pml4te != NULL);
-        assert(pml4te != NULL);
-        assert(guest_space_pdpte != NULL);
-        assert(pdpte != NULL);
+        hax_assert(guest_space_pml4te != NULL);
+        hax_assert(pml4te != NULL);
+        hax_assert(guest_space_pdpte != NULL);
+        hax_assert(pdpte != NULL);
 
         pml4te_before_update = *pml4te;
         pml4te->pae_lme_entry.bits.accessed = 1;
@@ -515,8 +515,8 @@ static void pw_update_ad_bits(
     if (pw_is_1gb_page_pdpte(pdpte))
         return;
 
-    assert(guest_space_pde != NULL);
-    assert(pde != NULL);
+    hax_assert(guest_space_pde != NULL);
+    hax_assert(pde != NULL);
 
     pde_before_update = *pde;
     // Doesn't matter which field "non_pae" or "pae_lme" is used
@@ -538,8 +538,8 @@ static void pw_update_ad_bits(
 
     pw_update_ad_bits_in_entry(guest_space_pde, &pde_before_update, pde);
 
-    assert(guest_space_pte != NULL);
-    assert(pte != NULL);
+    hax_assert(guest_space_pte != NULL);
+    hax_assert(pte != NULL);
 
     pte_before_update = *pte;
     // Doesn't matter which field "non_pae" or "pae_lme" is used
@@ -582,17 +582,10 @@ uint32_t pw_perform_page_walk(
     PW_PAGE_ENTRY *pml4te_ptr, *pdpte_ptr, *pde_ptr, *pte_ptr = NULL;
     PW_PAGE_ENTRY pml4te_val, pdpte_val, pde_val, pte_val;
     void *pml4t_hva, *pdpt_hva, *pd_hva, *pt_hva;
-#ifdef CONFIG_HAX_EPT2
     hax_kmap_user pml4t_kmap, pdpt_kmap, pd_kmap, pt_kmap;
-#endif // CONFIG_HAX_EPT2
     uint64_t pml4t_gpa, pdpt_gpa, pd_gpa, pt_gpa;
     uint32_t pml4te_index, pdpte_index, pde_index, pte_index;
     bool is_write, is_user;
-#ifndef CONFIG_HAX_EPT2
-#ifdef HAX_ARCH_X86_32
-    bool is_kernel;
-#endif
-#endif // !CONFIG_HAX_EPT2
 
     pml4te_ptr = pdpte_ptr = pde_ptr = NULL;
     pml4t_hva = pdpt_hva = pd_hva = pt_hva = NULL;
@@ -604,11 +597,6 @@ uint32_t pw_perform_page_walk(
 
     is_write = access & TF_WRITE;
     is_user  = access & TF_USER;
-#ifndef CONFIG_HAX_EPT2
-#ifdef HAX_ARCH_X86_32
-    is_kernel = (virt_addr >= KERNEL_BASE) ? true : false;
-#endif
-#endif // !CONFIG_HAX_EPT2
 
     pw_retrieve_indices(virt_addr, is_pae, is_lme, &pml4te_index, &pdpte_index,
                         &pde_index, &pte_index);
@@ -616,20 +604,14 @@ uint32_t pw_perform_page_walk(
     first_table = pw_retrieve_table_from_cr3(cr3, is_pae, is_lme);
 
     if (is_pae) {
+        uint8_t *pdpt_page_hva;
+
         if (is_lme) {
             pml4t_gpa = first_table;
-#ifdef CONFIG_HAX_EPT2
             pml4t_hva = gpa_space_map_page(&vcpu->vm->gpa_space,
                                            pml4t_gpa >> PG_ORDER_4K,
                                            &pml4t_kmap, NULL);
-#else // !CONFIG_HAX_EPT2
-#ifdef HAX_ARCH_X86_32
-            pml4t_hva = hax_map_gpfn(vcpu->vm, pml4t_gpa >> 12, is_kernel, cr3,
-                                     1);
-#else
-            pml4t_hva = hax_map_gpfn(vcpu->vm, pml4t_gpa >> 12);
-#endif
-#endif // CONFIG_HAX_EPT2
+
             if (pml4t_hva == NULL) {
                 retval = TF_FAILED;
                 goto out;
@@ -654,21 +636,17 @@ uint32_t pw_perform_page_walk(
             pdpt_gpa = first_table;
         }
 
-#ifdef CONFIG_HAX_EPT2
-        pdpt_hva = gpa_space_map_page(&vcpu->vm->gpa_space,
-                                      pdpt_gpa >> PG_ORDER_4K,
-                                      &pdpt_kmap, NULL);
-#else // !CONFIG_HAX_EPT2
-#ifdef HAX_ARCH_X86_32
-        pdpt_hva = hax_map_gpfn(vcpu->vm, pdpt_gpa >> 12, is_kernel, cr3, 1);
-#else
-        pdpt_hva = hax_map_gpfn(vcpu->vm, pdpt_gpa >> 12);
-#endif
-#endif // CONFIG_HAX_EPT2
-        if (pdpt_hva == NULL) {
+        pdpt_page_hva = gpa_space_map_page(&vcpu->vm->gpa_space,
+                                           pdpt_gpa >> PG_ORDER_4K,
+                                           &pdpt_kmap, NULL);
+
+        if (pdpt_page_hva == NULL) {
             retval = TF_FAILED;
             goto out;
         }
+
+        // In PAE paging mode, pdpt_gpa is 32-byte aligned, not 4KB-aligned
+        pdpt_hva = pdpt_page_hva + (uint)(pdpt_gpa & (PAGE_SIZE_4K - 1));
 
         pdpte_ptr = pw_retrieve_table_entry(vcpu, pdpt_hva, pdpte_index,
                                             is_pae);
@@ -730,16 +708,9 @@ uint32_t pw_perform_page_walk(
     }
 
     pd_gpa = is_pae ? pw_retrieve_phys_addr(&pdpte_val, is_pae) : first_table;
-#ifdef CONFIG_HAX_EPT2
     pd_hva = gpa_space_map_page(&vcpu->vm->gpa_space, pd_gpa >> PG_ORDER_4K,
                                 &pd_kmap, NULL);
-#else // !CONFIG_HAX_EPT2
-#ifdef HAX_ARCH_X86_32
-    pd_hva = hax_map_gpfn(vcpu->vm, pd_gpa >> 12, is_kernel, cr3, 2);
-#else
-    pd_hva = hax_map_gpfn(vcpu->vm, pd_gpa >> 12);
-#endif
-#endif // CONFIG_HAX_EPT2
+
     if (pd_hva == NULL) {
         retval = TF_FAILED;
         goto out;
@@ -808,16 +779,9 @@ uint32_t pw_perform_page_walk(
     // 4KB page size
     *order = PG_ORDER_4K;
     pt_gpa = pw_retrieve_phys_addr(&pde_val, is_pae);
-#ifdef CONFIG_HAX_EPT2
     pt_hva = gpa_space_map_page(&vcpu->vm->gpa_space, pt_gpa >> 12, &pt_kmap,
                                 NULL);
-#else // !CONFIG_HAX_EPT2
-#ifdef HAX_ARCH_X86_32
-    pt_hva = hax_map_gpfn(vcpu->vm, pt_gpa >> 12, is_kernel, cr3, 1);
-#else
-    pt_hva = hax_map_gpfn(vcpu->vm, pt_gpa >> 12);
-#endif
-#endif // CONFIG_HAX_EPT2
+
     if (pt_hva == NULL) {
         retval = TF_FAILED;
         goto out;
@@ -871,37 +835,18 @@ uint32_t pw_perform_page_walk(
     // page walk succeeded
 
 out:
-#ifdef CONFIG_HAX_EPT2
-    if (pml4t_hva != NULL)
+    if (pml4t_hva != NULL) {
         gpa_space_unmap_page(&vcpu->vm->gpa_space, &pml4t_kmap);
-    if (pdpt_hva  != NULL)
+    }
+    if (pdpt_hva != NULL) {
         gpa_space_unmap_page(&vcpu->vm->gpa_space, &pdpt_kmap);
-    if (pd_hva    != NULL)
+    }
+    if (pd_hva != NULL) {
         gpa_space_unmap_page(&vcpu->vm->gpa_space, &pd_kmap);
-    if (pt_hva    != NULL)
+    }
+    if (pt_hva != NULL) {
         gpa_space_unmap_page(&vcpu->vm->gpa_space, &pt_kmap);
-#else // !CONFIG_HAX_EPT2
-#ifdef HAX_ARCH_X86_32
-    if (pml4t_hva != NULL)
-        hax_unmap_gpfn(vcpu->vm, pml4t_hva, pml4t_gpa >> 12);
-    if (pdpt_hva  != NULL)
-        hax_unmap_gpfn(vcpu->vm, pdpt_hva, pdpt_gpa >> 12);
-    if (pd_hva    != NULL)
-        hax_unmap_gpfn(vcpu->vm, pd_hva, pd_gpa >> 12);
-    if (pt_hva    != NULL)
-        hax_unmap_gpfn(vcpu->vm, pt_hva, pt_gpa >> 12);
-#else
-    if (pml4t_hva != NULL)
-        hax_unmap_gpfn(pml4t_hva);
-    if (pdpt_hva  != NULL)
-        hax_unmap_gpfn(pdpt_hva);
-    if (pd_hva    != NULL)
-        hax_unmap_gpfn(pd_hva);
-    if (pt_hva    != NULL)
-        hax_unmap_gpfn(pt_hva);
-#endif
-#endif // CONFIG_HAX_EPT2
-
+    }
     if (gpa_out != NULL) {
         *gpa_out = gpa;
     }

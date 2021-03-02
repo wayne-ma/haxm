@@ -39,24 +39,8 @@
 // declaration
 struct vcpu_t;
 
-extern int hax_page_size;
-
 #define HAX_CUR_VERSION    0x0004
 #define HAX_COMPAT_VERSION 0x0001
-
-// EPT2 refers to the new memory virtualization engine, which implements lazy
-// allocation, and therefore greatly speeds up ALLOC_RAM and SET_RAM VM ioctls
-// as well as brings down HAXM driver's memory footprint. It is mostly written
-// in new source files (including core/include/memory.h, core/include/ept2.h,
-// include/hax_host_mem.h and their respective .c/.cpp files), separate from
-// the code for the legacy memory virtualization engine (which is scattered
-// throughout core/memory.c, core/vm.c, core/ept.c, etc.). This makes it
-// possible to select between the two engines at compile time, simply by
-// defining (which selects the new engine) or undefining (which selects the old
-// engine) the following macro.
-// TODO: Completely remove the legacy engine and this macro when the new engine
-// is considered stable.
-#define CONFIG_HAX_EPT2
 
 /* TBD */
 #define for_each_vcpu(vcpu, vm)
@@ -131,8 +115,6 @@ int hax_clear_vcpumem(struct hax_vcpu_mem *mem);
 int hax_setup_vcpumem(struct hax_vcpu_mem *vcpumem, uint64_t uva, uint32_t size,
                       int flags);
 
-uint64_t get_hpfn_from_pmem(struct hax_vcpu_mem *pmem, uint64_t va);
-
 #define HAX_VCPUMEM_VALIDVA 0x1
 
 enum hax_notify_event {
@@ -162,27 +144,11 @@ void hax_slab_free(phax_slab_t *type, void* cache);
  * requirement
  */
 hax_pa_t hax_pa(void *va);
-/*
- * Map the physical address into kernel address space
- * XXX please don't use this function for long-time map.
- * in Mac side, we utilize the IOMemoryDescriptor class to map this, and the
- * object have to be kept in a list till the vunmap. And when we do the vunmap,
- * we need search the list again, thus it will cost memory/performance issue
- */
-void *hax_vmap(hax_pa_t pa, uint32_t size);
-static inline void * hax_vmap_pfn(hax_pfn_t pfn)
-{
-    return hax_vmap(pfn << HAX_PAGE_SHIFT, HAX_PAGE_SIZE);
-}
 
 /*
  * unmap the memory mapped above
  */
 void hax_vunmap(void *va, uint32_t size);
-static inline void hax_vunmap_pfn(void *va)
-{
-    hax_vunmap((void*)((mword)va & ~HAX_PAGE_MASK), HAX_PAGE_SIZE);
-}
 
 struct hax_page;
 typedef struct hax_page * phax_page;
@@ -207,7 +173,7 @@ void hax_set_page(phax_page page);
 
 static inline uint64_t hax_page2pa(phax_page page)
 {
-    return hax_page2pfn(page) << PAGE_SHIFT;
+    return hax_page2pfn(page) << HAX_PAGE_SHIFT;
 }
 
 #define hax_page_pa hax_page2pa
@@ -217,7 +183,10 @@ void *hax_map_page(struct hax_page *page);
 
 void hax_unmap_page(struct hax_page *page);
 
-int hax_log_level(int level, const char *fmt, ...);
+void hax_log(int level, const char *fmt, ...);
+void hax_panic(const char *fmt, ...);
+
+uint32_t hax_cpu_id(void);
 
 #ifdef __cplusplus
 }
@@ -229,20 +198,143 @@ static inline unsigned char *hax_page_va(struct hax_page *page)
     return (unsigned char *)page->kva;
 }
 
-#define HAX_MAX_CPUS (sizeof(uint64_t) * 8)
+/* Utilities */
+#define HAX_NOLOG       0xff
+#define HAX_LOGPANIC    5
+#define HAX_LOGE        4
+#define HAX_LOGW        3
+#define HAX_LOGI        2
+#define HAX_LOGD        1
+#define HAX_LOG_DEFAULT 3
 
-/* Host SMP */
-extern cpumap_t cpu_online_map;
-extern int max_cpus;
+#ifdef HAX_PLATFORM_DARWIN
+#include "darwin/hax_mac.h"
+#endif
+#ifdef HAX_PLATFORM_LINUX
+#include "linux/hax_linux.h"
+#endif
+#ifdef HAX_PLATFORM_NETBSD
+#include "netbsd/hax_netbsd.h"
+#endif
+#ifdef HAX_PLATFORM_WINDOWS
+#include "windows/hax_windows.h"
+#endif
+
+#define HAX_MAX_CPU_PER_GROUP (sizeof(hax_cpumask_t) * 8)
+#define HAX_MAX_CPU_GROUP ((uint16_t)(~0ULL))
+#define HAX_MAX_CPUS (HAX_MAX_CPU_PER_GROUP * HAX_MAX_CPU_GROUP)
+
+typedef struct hax_cpu_group_t {
+    hax_cpumask_t map;
+    uint32_t num;
+    uint16_t id;
+} hax_cpu_group_t;
+
+typedef struct hax_cpu_pos_t {
+    uint16_t group;
+    uint16_t bit;
+} hax_cpu_pos_t;
+
+typedef struct hax_cpumap_t {
+    hax_cpu_group_t *cpu_map;
+    hax_cpu_pos_t *cpu_pos;
+    uint16_t group_num;
+    uint32_t cpu_num;
+} hax_cpumap_t;
+
+typedef struct smp_call_parameter {
+    void (*func)(void *);
+    void *param;
+    hax_cpumap_t *cpus;
+} smp_call_parameter;
+
+extern hax_cpumap_t cpu_online_map;
+
+static inline void cpu2cpumap(uint32_t cpu_id, hax_cpu_pos_t *target)
+{
+    if (!target)
+        return;
+
+    if (cpu_id >= cpu_online_map.cpu_num) {
+        target->group = (uint16_t)(~0ULL);
+        target->bit = (uint16_t)(~0ULL);
+    } else {
+        target->group = cpu_online_map.cpu_pos[cpu_id].group;
+        target->bit = cpu_online_map.cpu_pos[cpu_id].bit;
+    }
+}
+
+static inline bool cpu_is_online(hax_cpumap_t *cpu_map, uint32_t cpu_id)
+{
+    hax_cpumask_t map;
+    uint16_t group, bit;
+
+    if (cpu_id >= cpu_map->cpu_num) {
+        hax_log(HAX_LOGE, "Invalid cpu-%d\n", cpu_id);
+        return 0;
+    }
+
+    group = cpu_map->cpu_pos[cpu_id].group;
+    if (group != cpu_map->cpu_map[group].id) {
+        hax_log(HAX_LOGE, "Group id doesn't match record\n", group);
+        return 0;
+    }
+
+    bit = cpu_map->cpu_pos[cpu_id].bit;
+    map = cpu_map->cpu_map[group].map;
+    return !!(((hax_cpumask_t)1 << bit) & map);
+}
+
+static inline void get_online_map(void *param)
+{
+    hax_cpumap_t *omap = (hax_cpumap_t *)param;
+    hax_cpu_group_t *cpu_map;
+    hax_cpu_pos_t * cpu_pos;
+    uint32_t cpu_id, group, bit;
+
+    cpu_id = hax_cpu_id();
+    group = cpu_id / HAX_MAX_CPU_PER_GROUP;
+    bit = cpu_id % HAX_MAX_CPU_PER_GROUP;
+
+    cpu_map = &(omap->cpu_map[group]);
+    cpu_pos = &(omap->cpu_pos[cpu_id]);
+
+    hax_test_and_set_bit(bit, &cpu_map->map);
+    cpu_map->id = group;
+    cpu_pos->group = group;
+    cpu_pos->bit = bit;
+}
+
+static void cpu_info_exit(void)
+{
+    if (cpu_online_map.cpu_map)
+        hax_vfree(cpu_online_map.cpu_map, cpu_online_map.group_num * sizeof(*cpu_online_map.cpu_map));
+    if (cpu_online_map.cpu_pos)
+        hax_vfree(cpu_online_map.cpu_pos, cpu_online_map.cpu_num * sizeof(*cpu_online_map.cpu_pos));
+    memset(&cpu_online_map, 0, sizeof(cpu_online_map));
+}
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-int smp_call_function(cpumap_t *cpus, void(*scfunc)(void *param), void *param);
-extern int cpu_number(void);
+int cpu_info_init(void);
+#ifdef HAX_PLATFORM_DARWIN
+hax_smp_func_ret_t smp_cfunction(void *param);
+#endif
+#ifdef HAX_PLATFORM_LINUX
+hax_smp_func_ret_t smp_cfunction(void *param);
+#endif
+#ifdef HAX_PLATFORM_NETBSD
+hax_smp_func_ret_t smp_cfunction(void *param, void *a2 __unused);
+#endif
+#ifdef HAX_PLATFORM_WINDOWS
+hax_smp_func_ret_t smp_cfunction(void *param);
+#endif
 
-uint32_t hax_cpuid(void);
+int hax_smp_call_function(hax_cpumap_t *cpus, void(*scfunc)(void *param),
+                          void *param);
+
 int proc_event_pending(struct vcpu_t *vcpu);
 
 void hax_disable_preemption(preempt_flag *eflags);
@@ -255,21 +347,6 @@ int hax_em64t_enabled(void);
 
 #ifdef __cplusplus
 }
-#endif
-
-/* Utilities */
-#define HAX_NOLOG       0xff
-#define HAX_LOGE        4
-#define HAX_LOGW        3
-#define HAX_LOGI        2
-#define HAX_LOGD        1
-#define HAX_LOG_DEFAULT 3
-
-#ifdef HAX_PLATFORM_DARWIN
-#include "darwin/hax_mac.h"
-#endif
-#ifdef HAX_PLATFORM_WINDOWS
-#include "windows/hax_windows.h"
 #endif
 
 #endif  // HAX_H_
