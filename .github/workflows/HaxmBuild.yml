@@ -71,9 +71,9 @@ jobs:
      steps:
      - uses: actions/checkout@v2
      - name: go to platform/linux
+       shell: bash
        run: |
           cd platforms/linux
           ls
-          cp Makefile makefile
-     - name: make
-       run: make
+          pwd
+          make
