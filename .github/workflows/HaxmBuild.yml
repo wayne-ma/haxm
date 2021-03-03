@@ -67,11 +67,11 @@ jobs:
         ls
         mv MacOSX.sdk MacOSX.sdk.bak
         #wget https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.15.sdk.tar.xz
-        wget https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz
+        wget https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.14.sdk.tar.xz
         sleep 10
         ls
-        tar xzf MacOSX10.13.sdk.tar.xz
-        mv MacOSX10.13.sdk MacOSX.sdk
+        tar xzf MacOSX10.14.sdk.tar.xz
+        mv MacOSX10.14.sdk MacOSX.sdk
         mv MacOSX11.1.sdk MacOSX11.1.sdk.bak
         #sudo chown -R root:wheel MacOSXsdk/
         #sudo xattr -rd com.apple.quarantine MacOSXsdk/
