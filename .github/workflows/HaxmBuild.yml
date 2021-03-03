@@ -65,9 +65,11 @@ jobs:
       run: |
         cd /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/
         ls
+        mv MacOSX.sdk MacOSX.sdk.bak
         wget https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz
         ls
-        tar xzvf MacOSX10.13.sdk.tar.xz
+        tar xzf MacOSX10.13.sdk.tar.xz
+        mv MacOSX10.13.sdk MacOSX.sdk
         cd -
         cd platforms/darwin
         xcodebuild -configuration Debug -sdk macosx
