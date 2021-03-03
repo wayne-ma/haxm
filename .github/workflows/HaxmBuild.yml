@@ -63,6 +63,12 @@ jobs:
       #run: nuget restore ${{env.SOLUTION_FILE_PATH}}
     - name: Mac darwin build
       run: |
+        cd /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/
+        ls
+        wget https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.13.sdk.tar.xz
+        ls
+        tar xzvf MacOSX10.13.sdk.tar.xz
+        cd -
         cd platforms/darwin
         xcodebuild -configuration Debug -sdk macosx
   my_third_job:
