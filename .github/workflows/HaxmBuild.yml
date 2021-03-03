@@ -70,9 +70,13 @@ jobs:
         ls
         tar xzf MacOSX10.13.sdk.tar.xz
         mv MacOSX10.13.sdk MacOSX.sdk
+        mv MacOSX11.1.sdk MacOSX11.1.sdk.bak
+        sudo chown -R root:wheel MacOSXsdk/
+        sudo xattr -rd com.apple.quarantine MacOSXsdk/
+        ls
         cd -
         cd platforms/darwin
-        xcodebuild -configuration Debug -sdk macosx
+        xcodebuild -configuration Debug -sdk macosx10.13
   my_third_job:
      name: linux build
      runs-on: ubuntu-latest
