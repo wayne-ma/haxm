@@ -78,7 +78,7 @@ jobs:
         #ls
         #cd -
         cd platforms/darwin
-        xcodebuild -configuration Debug -sdk macosx ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO
+        xcodebuild -configuration Debug -sdk macosx ARCHS=x86_64 
   my_third_job:
      name: linux build
      runs-on: ubuntu-latest
