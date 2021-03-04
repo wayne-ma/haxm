@@ -64,6 +64,7 @@ jobs:
     - name: Mac darwin build
       run: |
         #cd /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/
+        brew install nasm
         ls
         #mv MacOSX.sdk MacOSX.sdk.bak
         #wget https://github.com/phracker/MacOSX-SDKs/releases/download/10.15/MacOSX10.15.sdk.tar.xz
