@@ -61,6 +61,10 @@ jobs:
      - name: Linux build on Ubuntu
        shell: bash
        run: |
+          cat /proc/cpuinfo
+          df -h
+          uname -a
+          pwd
           wget -P /tmp/downloads http://mirrors.kernel.org/ubuntu/pool/universe/n/nasm/nasm_2.13.02-0.1_amd64.deb
           sudo apt-get install -y dpkg
           sudo dpkg -i /tmp/downloads/nasm_2.13.02-0.1_amd64.deb
